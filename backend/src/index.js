@@ -24,6 +24,7 @@ app.use('/api/problems', require('./routes/problems'));
 app.use('/api/submissions', require('./routes/submissions'));
 app.use('/api/contests', require('./routes/contests'));
 app.use('/api/admin', require('./routes/admin'));
+app.use('/api/learn',    require('./routes/learn'));
 
 // 404 handler (after all routes)
 app.use((req, res) => {
