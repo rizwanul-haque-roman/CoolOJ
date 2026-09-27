@@ -88,7 +88,7 @@ function runMockJudge(code, language, tests) {
 
 router.post("/", requireAuth, async (req, res) => {
   const { problem_id, language, code, contest_id } = req.body;
-  const user_id = req.user.userId;
+  const userId = req.user.userId;
 
   if (!problem_id || !language || typeof code !== "string") {
     return res.status(400).json({
@@ -96,32 +96,45 @@ router.post("/", requireAuth, async (req, res) => {
     });
   }
 
+  if (!code.trim()) {
+    return res.status(400).json({
+      error: "Code cannot be empty.",
+    });
+  }
+
   try {
     const [sub] = await db.execute(
-      "INSERT INTO submissions (user_id, problem_id, contest_id, language, code) VALUES (?, ?, ?, ?, ?)",
-      [user_id, problem_id, contest_id || null, language, code],
+      `INSERT INTO submissions
+       (user_id, problem_id, contest_id, language, code)
+       VALUES (?, ?, ?, ?, ?)`,
+      [userId, problem_id, contest_id || null, language, code],
     );
 
-    const submission_id = sub.insertId;
+    const submissionId = sub.insertId;
 
     const [tests] = await db.execute(
-      "SELECT input, expected_output FROM test_cases WHERE problem_id = ? AND is_sample = false",
+      `SELECT input, expected_output
+       FROM test_cases
+       WHERE problem_id = ? AND is_sample = false`,
       [problem_id],
     );
 
     if (tests.length === 0) {
       await db.execute(
-        "UPDATE submissions SET verdict = 'No Test Cases', score = 0 WHERE id = ?",
-        [submission_id],
+        `UPDATE submissions
+         SET verdict = 'No Test Cases', score = 0
+         WHERE id = ?`,
+        [submissionId],
       );
 
       return res.json({
-        submission_id,
+        submission_id: submissionId,
         verdict: "No Test Cases",
         passed_tests: 0,
         total_tests: 0,
         time_used_ms: 0,
         memory_used_kb: 0,
+        score: 0,
       });
     }
 
@@ -129,18 +142,20 @@ router.post("/", requireAuth, async (req, res) => {
     const score = result.verdict === "Accepted" ? 100 : 0;
 
     await db.execute(
-      "UPDATE submissions SET verdict = ?, time_used_ms = ?, memory_used_kb = ?, score = ? WHERE id = ?",
+      `UPDATE submissions
+       SET verdict = ?, time_used_ms = ?, memory_used_kb = ?, score = ?
+       WHERE id = ?`,
       [
         result.verdict,
         result.timeUsedMs,
         result.memoryUsedKb,
         score,
-        submission_id,
+        submissionId,
       ],
     );
 
     res.json({
-      submission_id,
+      submission_id: submissionId,
       verdict: result.verdict,
       passed_tests: result.passedTests,
       total_tests: result.totalTests,
@@ -154,19 +169,53 @@ router.post("/", requireAuth, async (req, res) => {
   }
 });
 
+router.get("/", requireAuth, async (req, res) => {
+  try {
+    const [rows] = await db.execute(
+      `SELECT
+        s.id,
+        s.problem_id,
+        p.title AS problem_title,
+        s.language,
+        s.verdict,
+        s.time_used_ms,
+        s.memory_used_kb,
+        s.score,
+        s.submitted_at
+      FROM submissions AS s
+      INNER JOIN problems AS p ON p.id = s.problem_id
+      WHERE s.user_id = ?
+      ORDER BY s.submitted_at DESC, s.id DESC`,
+      [req.user.userId],
+    );
+
+    res.json(rows);
+  } catch (err) {
+    console.error("Global submission history error:", err);
+    res.status(500).json({ error: "Unable to load submission history." });
+  }
+});
+
 router.get("/problem/:problem_id", requireAuth, async (req, res) => {
   try {
     const [rows] = await db.execute(
-      `SELECT id, language, verdict, time_used_ms, memory_used_kb, submitted_at
-       FROM submissions
-       WHERE user_id = ? AND problem_id = ?
-       ORDER BY submitted_at DESC`,
+      `SELECT
+        id,
+        language,
+        verdict,
+        time_used_ms,
+        memory_used_kb,
+        score,
+        submitted_at
+      FROM submissions
+      WHERE user_id = ? AND problem_id = ?
+      ORDER BY submitted_at DESC, id DESC`,
       [req.user.userId, req.params.problem_id],
     );
 
     res.json(rows);
   } catch (err) {
-    console.error("Submission history error:", err);
+    console.error("Problem submission history error:", err);
     res.status(500).json({ error: "Unable to load submission history." });
   }
 });
