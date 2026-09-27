@@ -8,9 +8,14 @@ const USERNAME_PATTERN = /^[a-zA-Z0-9_-]{3,30}$/;
 
 function createToken(user) {
   return jwt.sign(
-    { userId: user.id, role: user.role },
+    {
+      userId: user.id,
+      role: user.role,
+    },
     process.env.JWT_SECRET,
-    { expiresIn: "7d" },
+    {
+      expiresIn: "7d",
+    },
   );
 }
 
@@ -51,17 +56,22 @@ router.post("/register", async (req, res) => {
       const existingUser = existing[0];
 
       if (existingUser.name.toLowerCase() === username.toLowerCase()) {
-        return res.status(409).json({ error: "Username is already taken." });
+        return res.status(409).json({
+          error: "Username is already taken.",
+        });
       }
 
-      return res.status(409).json({ error: "Email is already registered." });
+      return res.status(409).json({
+        error: "Email is already registered.",
+      });
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
 
     const [result] = await db.execute(
-      `INSERT INTO users (name, email, password_hash, role)
-       VALUES (?, ?, ?, 'student')`,
+      `INSERT INTO users
+        (name, email, password_hash, role, status)
+       VALUES (?, ?, ?, 'student', 'active')`,
       [username, email, passwordHash],
     );
 
@@ -70,11 +80,15 @@ router.post("/register", async (req, res) => {
       name: username,
       email,
       role: "student",
+      status: "active",
     };
 
     const token = createToken(user);
 
-    return res.status(201).json({ token, user });
+    return res.status(201).json({
+      token,
+      user,
+    });
   } catch (err) {
     console.error("Registration error:", err);
 
@@ -102,22 +116,44 @@ router.post("/login", async (req, res) => {
 
   try {
     const [rows] = await db.execute(
-      `SELECT id, name, email, password_hash, role
-       FROM users
-       WHERE LOWER(email) = LOWER(?)
-       LIMIT 1`,
+      `SELECT
+        id,
+        name,
+        email,
+        password_hash,
+        role,
+        status
+      FROM users
+      WHERE LOWER(email) = LOWER(?)
+      LIMIT 1`,
       [email],
     );
 
     if (rows.length === 0) {
-      return res.status(401).json({ error: "Invalid email or password." });
+      return res.status(401).json({
+        error: "Invalid email or password.",
+      });
     }
 
     const user = rows[0];
+
     const validPassword = await bcrypt.compare(password, user.password_hash);
 
     if (!validPassword) {
-      return res.status(401).json({ error: "Invalid email or password." });
+      return res.status(401).json({
+        error: "Invalid email or password.",
+      });
+    }
+
+    if (user.status !== "active") {
+      const errorMessage =
+        user.status === "suspended"
+          ? "This account has been suspended. Please contact an administrator."
+          : "This account is no longer available. Please contact an administrator.";
+
+      return res.status(403).json({
+        error: errorMessage,
+      });
     }
 
     const safeUser = {
@@ -125,6 +161,7 @@ router.post("/login", async (req, res) => {
       name: user.name,
       email: user.email,
       role: user.role,
+      status: user.status,
     };
 
     const token = createToken(safeUser);
@@ -135,7 +172,10 @@ router.post("/login", async (req, res) => {
     });
   } catch (err) {
     console.error("Login error:", err);
-    return res.status(500).json({ error: "Unable to log in." });
+
+    return res.status(500).json({
+      error: "Unable to log in.",
+    });
   }
 });
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import api from "../api/axios";
 
-function AdminContestPage() {
+function Admin() {
   const [contests, setContests] = useState([]);
   const [problems, setProblems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -104,7 +104,7 @@ function AdminContestPage() {
   const handleRemoveProblem = async (problemId) => {
     try {
       await api.delete(
-        `/admin/contests/${selectedContest.id}/problems/${problemId}`
+        `/admin/contests/${selectedContest.id}/problems/${problemId}`,
       );
       fetchContestProblems(selectedContest.id);
     } catch (err) {
@@ -139,7 +139,12 @@ function AdminContestPage() {
   const tabs = [
     { key: "contests", label: "All Contests" },
     { key: "create", label: "Create Contest" },
-    { key: "manage", label: selectedContest ? `Manage: ${selectedContest.title}` : "Manage Contest" },
+    {
+      key: "manage",
+      label: selectedContest
+        ? `Manage: ${selectedContest.title}`
+        : "Manage Contest",
+    },
   ];
 
   return (
@@ -178,10 +183,7 @@ function AdminContestPage() {
             Upcoming
           </p>
           <h3 className="mt-3 text-3xl font-bold text-amber-300">
-            {
-              contests.filter((c) => new Date() < new Date(c.start_time))
-                .length
-            }
+            {contests.filter((c) => new Date() < new Date(c.start_time)).length}
           </h3>
           <p className="mt-2 text-sm text-slate-400">Scheduled contests</p>
         </div>
@@ -209,7 +211,9 @@ function AdminContestPage() {
       {activeTab === "contests" && (
         <section className="grid gap-6 xl:grid-cols-4">
           <div className="rounded-3xl border border-white/10 bg-slate-900/50 p-6 shadow-2xl backdrop-blur-xl xl:col-span-3">
-            <h2 className="text-xl font-semibold text-white">Contest Archive</h2>
+            <h2 className="text-xl font-semibold text-white">
+              Contest Archive
+            </h2>
             <p className="mt-2 text-sm leading-7 text-slate-400">
               Click a contest to manage its problems and view rankings.
             </p>
@@ -286,7 +290,9 @@ function AdminContestPage() {
           {/* Side panel */}
           <div className="space-y-6 xl:col-span-1">
             <div className="rounded-3xl border border-white/10 bg-slate-900/50 p-5 shadow-2xl backdrop-blur-xl">
-              <h3 className="text-lg font-semibold text-white">Quick Actions</h3>
+              <h3 className="text-lg font-semibold text-white">
+                Quick Actions
+              </h3>
               <div className="mt-5 space-y-3">
                 <button
                   onClick={() => setActiveTab("create")}
@@ -298,19 +304,21 @@ function AdminContestPage() {
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-slate-900/50 p-5 shadow-2xl backdrop-blur-xl">
-              <h3 className="text-lg font-semibold text-white">Contest Status</h3>
+              <h3 className="text-lg font-semibold text-white">
+                Contest Status
+              </h3>
               <ul className="mt-5 space-y-3 text-sm leading-7 text-slate-300">
                 <li>
                   <strong className="text-emerald-300">Live:</strong> Contest is
                   currently running.
                 </li>
                 <li>
-                  <strong className="text-amber-300">Upcoming:</strong> Scheduled
-                  for the future.
+                  <strong className="text-amber-300">Upcoming:</strong>{" "}
+                  Scheduled for the future.
                 </li>
                 <li>
-                  <strong className="text-slate-300">Ended:</strong> Past the end
-                  time.
+                  <strong className="text-slate-300">Ended:</strong> Past the
+                  end time.
                 </li>
               </ul>
             </div>
@@ -322,7 +330,9 @@ function AdminContestPage() {
       {activeTab === "create" && (
         <section className="grid gap-6 xl:grid-cols-4">
           <div className="rounded-3xl border border-white/10 bg-slate-900/50 p-6 shadow-2xl backdrop-blur-xl xl:col-span-3">
-            <h2 className="text-xl font-semibold text-white">Create New Contest</h2>
+            <h2 className="text-xl font-semibold text-white">
+              Create New Contest
+            </h2>
             <p className="mt-2 text-sm leading-7 text-slate-400">
               Fill in the details below to host a new contest.
             </p>
@@ -559,9 +569,7 @@ function AdminContestPage() {
           {/* Side info */}
           <div className="space-y-6 xl:col-span-1">
             <div className="rounded-3xl border border-white/10 bg-slate-900/50 p-5 shadow-2xl backdrop-blur-xl">
-              <h3 className="text-lg font-semibold text-white">
-                Contest Info
-              </h3>
+              <h3 className="text-lg font-semibold text-white">Contest Info</h3>
               <div className="mt-5 space-y-4">
                 <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
                   <span className="text-sm text-slate-400">Title</span>
@@ -619,4 +627,4 @@ function AdminContestPage() {
   );
 }
 
-export default AdminContestPage;
+export default Admin;

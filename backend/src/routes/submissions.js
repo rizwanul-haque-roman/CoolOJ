@@ -220,4 +220,62 @@ router.get("/problem/:problem_id", requireAuth, async (req, res) => {
   }
 });
 
+router.get("/:submission_id", requireAuth, async (req, res) => {
+  const submissionId = Number(req.params.submission_id);
+
+  if (!Number.isInteger(submissionId) || submissionId <= 0) {
+    return res.status(400).json({ error: "Invalid submission ID." });
+  }
+
+  try {
+    const [rows] = await db.execute(
+      `SELECT
+        s.id,
+        s.user_id,
+        s.problem_id,
+        s.contest_id,
+        s.language,
+        s.code,
+        s.verdict,
+        s.score,
+        s.time_used_ms,
+        s.memory_used_kb,
+        s.submitted_at,
+        p.title AS problem_title,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM submissions AS s
+      INNER JOIN problems AS p ON p.id = s.problem_id
+      INNER JOIN users AS u ON u.id = s.user_id
+      WHERE s.id = ?
+      LIMIT 1`,
+      [submissionId],
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Submission not found." });
+    }
+
+    const submission = rows[0];
+    const isOwner = Number(submission.user_id) === Number(req.user.userId);
+    const isAdmin = req.user.role === "admin";
+
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({
+        error: "You do not have permission to view this submission.",
+      });
+    }
+
+    if (!isAdmin) {
+      delete submission.user_email;
+      delete submission.user_id;
+    }
+
+    res.json(submission);
+  } catch (err) {
+    console.error("Submission details error:", err);
+    res.status(500).json({ error: "Unable to load submission details." });
+  }
+});
+
 module.exports = router;

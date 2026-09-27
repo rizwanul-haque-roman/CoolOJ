@@ -126,8 +126,13 @@ function Submissions() {
                   key={submission.id}
                   className="transition hover:bg-white/[0.03]"
                 >
-                  <td className="px-4 py-3 font-mono text-slate-300">
-                    #{submission.id}
+                  <td className="px-4 py-3 font-mono">
+                    <Link
+                      to={`/submissions/${submission.id}`}
+                      className="text-cyan-300 transition hover:text-cyan-200"
+                    >
+                      #{submission.id}
+                    </Link>
                   </td>
 
                   <td className="px-4 py-3">
