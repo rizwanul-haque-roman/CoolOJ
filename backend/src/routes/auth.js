@@ -5,23 +5,33 @@ const jwt = require('jsonwebtoken');
 const db = require('../db');
 
 router.post('/register', async (req, res) => {
-  const { name, email, password } = req.body;
+  const { name, username, email, password } = req.body;
+  const finalName = name || username;
 
   try {
+    if (!finalName || !email || !password) {
+      return res.status(400).json({
+        error: 'Username, email, and password are required'
+      });
+    }
+
     const [existing] = await db.execute(
       'SELECT id FROM users WHERE email = ?',
       [email]
     );
 
     if (existing.length > 0) {
-      return res.status(400).json({ error: 'Email already registered' });
+      return res.status(400).json({
+        error: 'Email already registered'
+      });
     }
 
     const hash = await bcrypt.hash(password, 10);
 
     const [result] = await db.execute(
-      'INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)',
-      [name, email, hash]
+      `INSERT INTO users (name, email, password_hash, role)
+       VALUES (?, ?, ?, ?)`,
+      [finalName, email, hash, 'student']
     );
 
     const [rows] = await db.execute(
@@ -30,14 +40,16 @@ router.post('/register', async (req, res) => {
     );
 
     const user = rows[0];
+
     const token = jwt.sign(
       { userId: user.id, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
 
-    res.json({ token, user });
+    res.status(201).json({ token, user });
   } catch (err) {
+    console.error('Registration error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

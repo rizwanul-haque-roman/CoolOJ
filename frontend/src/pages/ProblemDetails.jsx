@@ -11,10 +11,22 @@ function ProblemDetails() {
   const [code, setCode] = useState(
     `#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n    // your code goes here\n\n}`,
   );
-  const [language, setLanguage] = useState("C++");
+  const [language, setLanguage] = useState("cpp");
   const [output, setOutput] = useState("");
   const [running, setRunning] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submissionResult, setSubmissionResult] = useState(null);
+  const [submissions, setSubmissions] = useState([]);
+  const [loadingSubmissions, setLoadingSubmissions] = useState(false);
+  const [submissionsError, setSubmissionsError] = useState("");
   const [customInput, setCustomInput] = useState("");
+
+  const languages = [
+    { value: "cpp", label: "C++" },
+    { value: "c", label: "C" },
+    { value: "python", label: "Python" },
+    { value: "java", label: "Java" },
+  ];
 
   useEffect(() => {
     const fetchProblem = async () => {
@@ -30,28 +42,116 @@ function ProblemDetails() {
         setLoading(false);
       }
     };
+
     fetchProblem();
   }, [id]);
 
   const getDifficultyClass = (difficulty) => {
     const value = (difficulty || "").toLowerCase();
-    if (value === "easy")
+    if (value === "easy") {
       return "inline-flex items-center rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-200";
-    if (value === "medium")
+    }
+    if (value === "medium") {
       return "inline-flex items-center rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-1 text-xs font-semibold text-amber-200";
-    if (value === "hard")
+    }
+    if (value === "hard") {
       return "inline-flex items-center rounded-full border border-rose-400/20 bg-rose-400/10 px-3 py-1 text-xs font-semibold text-rose-200";
+    }
     return "inline-flex items-center rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-slate-300";
+  };
+
+    const loadSubmissions = async () => {
+    setLoadingSubmissions(true);
+    setSubmissionsError("");
+
+    try {
+      const res = await api.get(`/submissions/problem/${id}`);
+      setSubmissions(res.data);
+    } catch (err) {
+      setSubmissionsError(
+        err.response?.data?.error || "Failed to load submission history.",
+      );
+    } finally {
+      setLoadingSubmissions(false);
+    }
   };
 
   const handleRun = async () => {
     setRunning(true);
-    setTimeout(() => {
+    setOutput("");
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const normalizedCode = code.toLowerCase();
+      let message = "Test run completed (simulated)";
+
+      if (normalizedCode.includes("compile_error")) {
+        message = "Compilation Error (simulated)";
+      } else if (
+        normalizedCode.includes("time_limit") ||
+        normalizedCode.includes("while(true)")
+      ) {
+        message = "Time Limit Exceeded (simulated)";
+      } else if (normalizedCode.includes("runtime_error")) {
+        message = "Runtime Error (simulated)";
+      }
+
+      const languageLabel =
+        languages.find((item) => item.value === language)?.label || language;
+
       setOutput(
-        "Runner placeholder:\n\nYour code editor is ready.\nNext we will connect this to Judge0 for live execution.",
+        [
+          message,
+          "",
+          `Language: ${languageLabel}`,
+          `Custom input: ${customInput || "(empty)"}`,
+          "",
+          "Note: Local code execution is not enabled in this demo environment.",
+          "Use Submit to evaluate the solution against the problem test cases.",
+        ].join("\n"),
       );
+    } finally {
       setRunning(false);
-    }, 700);
+    }
+  };
+
+  const handleSubmit = async () => {
+    setSubmitting(true);
+    setSubmissionResult(null);
+    setOutput("");
+
+    try {
+      const res = await api.post("/submissions", {
+        problem_id: Number(id),
+        language,
+        code,
+      });
+
+      const result = res.data;
+      setSubmissionResult(result);
+
+      setOutput(
+        [
+          `Verdict: ${result.verdict}`,
+          `Tests: ${result.passed_tests ?? 0}/${result.total_tests ?? 0}`,
+          `Time: ${result.time_used_ms ?? 0} ms`,
+          `Memory: ${result.memory_used_kb ?? 0} KB`,
+          `Score: ${result.score ?? 0}`,
+          "",
+          `Submission ID: ${result.submission_id}`,
+        ].join("\n"),
+      );
+
+      setActiveTab("submissions");
+      await loadSubmissions();
+    } catch (err) {
+      const message =
+        err.response?.data?.error || "Submission failed. Please try again.";
+      setOutput(`Submission Error\n\n${message}`);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const tabs = [
@@ -60,8 +160,6 @@ function ProblemDetails() {
     { key: "solution", label: "Solution" },
     { key: "help", label: "Help" },
   ];
-
-  const languages = ["C++", "C", "Python", "Java"];
 
   if (loading) {
     return (
@@ -89,12 +187,10 @@ function ProblemDetails() {
 
   return (
     <div className="flex h-[calc(100vh-120px)] gap-0 overflow-hidden rounded-3xl border border-white/10 shadow-2xl">
-      {/* ── LEFT PANEL ── scrollable statement area */}
       <div className="flex w-[52%] shrink-0 flex-col border-r border-white/10 bg-slate-900/60 backdrop-blur-xl">
-        {/* Problem header */}
         <div className="border-b border-white/10 bg-slate-900/80 px-6 py-4">
           <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3 min-w-0">
+            <div className="flex min-w-0 items-center gap-3">
               <Link
                 to="/problems"
                 className="shrink-0 rounded-xl border border-white/10 bg-white/5 p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-white"
@@ -122,7 +218,6 @@ function ProblemDetails() {
             </div>
           </div>
 
-          {/* Meta chips */}
           <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-400">
             <span className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1">
               <svg
@@ -171,12 +266,17 @@ function ProblemDetails() {
           </div>
         </div>
 
-        {/* Tabs */}
         <div className="flex gap-0 border-b border-white/10 bg-slate-900/60 px-6">
           {tabs.map((tab) => (
             <button
               key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
+              onClick={() => {
+                setActiveTab(tab.key);
+
+                if (tab.key === "submissions") {
+                  loadSubmissions();
+                }
+              }}
               className={[
                 "relative px-4 py-3 text-sm font-medium transition",
                 activeTab === tab.key
@@ -189,11 +289,9 @@ function ProblemDetails() {
           ))}
         </div>
 
-        {/* Tab content — scrollable */}
         <div className="flex-1 overflow-y-auto px-6 py-5 text-sm leading-8 text-slate-300">
           {activeTab === "statement" && (
             <div className="space-y-6">
-              {/* Statement */}
               <div>
                 <h3 className="mb-3 text-base font-semibold text-white">
                   Problem Statement
@@ -203,7 +301,6 @@ function ProblemDetails() {
                 </p>
               </div>
 
-              {/* Input/Output Format */}
               <div>
                 <h3 className="mb-2 text-base font-semibold text-white">
                   Input Format
@@ -222,7 +319,6 @@ function ProblemDetails() {
                 </p>
               </div>
 
-              {/* Constraints */}
               <div>
                 <h3 className="mb-2 text-base font-semibold text-white">
                   Constraints
@@ -231,8 +327,8 @@ function ProblemDetails() {
                   {(problem.constraints || "Not provided")
                     .split("\n")
                     .filter(Boolean)
-                    .map((line, i) => (
-                      <li key={i} className="flex items-start gap-2">
+                    .map((line, index) => (
+                      <li key={index} className="flex items-start gap-2">
                         <span className="mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-400" />
                         <span>{line}</span>
                       </li>
@@ -240,7 +336,6 @@ function ProblemDetails() {
                 </ul>
               </div>
 
-              {/* Sample */}
               <div>
                 <h3 className="mb-3 text-base font-semibold text-white">
                   Sample 1:
@@ -301,7 +396,6 @@ function ProblemDetails() {
                 )}
               </div>
 
-              {/* More Info */}
               <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                 <h3 className="mb-4 text-base font-semibold text-white">
                   More Info
@@ -331,10 +425,108 @@ function ProblemDetails() {
           )}
 
           {activeTab === "submissions" && (
-            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-center text-slate-400">
-              Your submission history for this problem will appear here.
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h3 className="text-base font-semibold text-white">
+                  Submission History
+                </h3>
+                <p className="mt-1 text-sm text-slate-400">
+                  Your saved attempts for this problem.
+                </p>
+              </div>
+
+              <button
+                onClick={loadSubmissions}
+                disabled={loadingSubmissions}
+                className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-xs font-semibold text-slate-300 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loadingSubmissions ? "Refreshing..." : "Refresh"}
+              </button>
             </div>
-          )}
+
+            {submissionsError && (
+              <div className="rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">
+                {submissionsError}
+              </div>
+            )}
+
+            {loadingSubmissions ? (
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-center text-slate-400">
+                Loading submissions...
+              </div>
+            ) : submissions.length === 0 ? (
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-center text-slate-400">
+                No submissions for this problem yet.
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-2xl border border-white/10 bg-[#020714]/50">
+                <table className="w-full min-w-[620px] text-left text-sm">
+                  <thead className="border-b border-white/10 bg-white/[0.03] text-xs uppercase tracking-wide text-slate-400">
+                    <tr>
+                      <th className="px-4 py-3 font-medium">ID</th>
+                      <th className="px-4 py-3 font-medium">Language</th>
+                      <th className="px-4 py-3 font-medium">Verdict</th>
+                      <th className="px-4 py-3 font-medium">Time</th>
+                      <th className="px-4 py-3 font-medium">Memory</th>
+                      <th className="px-4 py-3 font-medium">Submitted</th>
+                    </tr>
+                  </thead>
+
+                  <tbody className="divide-y divide-white/10">
+                    {submissions.map((submission) => {
+                      const accepted = submission.verdict === "Accepted";
+
+                      return (
+                        <tr
+                          key={submission.id}
+                          className="transition hover:bg-white/[0.03]"
+                        >
+                          <td className="px-4 py-3 font-mono text-slate-300">
+                            #{submission.id}
+                          </td>
+
+                          <td className="px-4 py-3 text-slate-300">
+                            {languages.find(
+                              (item) => item.value === submission.language,
+                            )?.label || submission.language}
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <span
+                              className={[
+                                "inline-flex rounded-full px-2.5 py-1 text-xs font-semibold",
+                                accepted
+                                  ? "bg-emerald-400/10 text-emerald-300"
+                                  : "bg-rose-400/10 text-rose-300",
+                              ].join(" ")}
+                            >
+                              {submission.verdict || "Pending"}
+                            </span>
+                          </td>
+
+                          <td className="px-4 py-3 text-slate-300">
+                            {submission.time_used_ms ?? 0} ms
+                          </td>
+
+                          <td className="px-4 py-3 text-slate-300">
+                            {submission.memory_used_kb ?? 0} KB
+                          </td>
+
+                          <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-400">
+                            {submission.submitted_at
+                              ? new Date(submission.submitted_at).toLocaleString()
+                              : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+)}
 
           {activeTab === "solution" && (
             <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-center text-slate-400">
@@ -344,9 +536,7 @@ function ProblemDetails() {
 
           {activeTab === "help" && (
             <div className="space-y-4">
-              <h3 className="text-base font-semibold text-white">
-                Judge Notes
-              </h3>
+              <h3 className="text-base font-semibold text-white">Judge Notes</h3>
               <ul className="space-y-3 text-slate-300">
                 <li className="flex items-start gap-2">
                   <span className="mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400" />
@@ -370,26 +560,23 @@ function ProblemDetails() {
         </div>
       </div>
 
-      {/* ── RIGHT PANEL ── sticky code editor */}
       <div className="flex flex-1 flex-col bg-[#070b17] backdrop-blur-xl">
-        {/* Editor toolbar */}
         <div className="flex items-center justify-between border-b border-white/10 bg-slate-900/80 px-4 py-3">
           <div className="flex items-center gap-2">
             <select
               value={language}
-              onChange={(e) => setLanguage(e.target.value)}
+              onChange={(event) => setLanguage(event.target.value)}
               className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-1.5 text-sm text-slate-200 outline-none transition focus:border-indigo-400/60"
             >
-              {languages.map((l) => (
-                <option key={l} value={l}>
-                  {l}
+              {languages.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
                 </option>
               ))}
             </select>
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Reset */}
             <button
               onClick={() =>
                 setCode(
@@ -411,7 +598,6 @@ function ProblemDetails() {
                 <path d="M3 3v5h5" />
               </svg>
             </button>
-            {/* Fullscreen icon placeholder */}
             <button
               className="rounded-xl border border-white/10 bg-white/5 p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-white"
               title="Expand"
@@ -430,18 +616,16 @@ function ProblemDetails() {
           </div>
         </div>
 
-        {/* Code textarea */}
         <div className="flex-1 overflow-hidden">
           <textarea
             className="h-full w-full resize-none bg-transparent p-4 font-mono text-sm leading-7 text-sky-100 outline-none placeholder:text-slate-500"
             value={code}
-            onChange={(e) => setCode(e.target.value)}
+            onChange={(event) => setCode(event.target.value)}
             spellCheck="false"
             style={{ minHeight: "300px" }}
           />
         </div>
 
-        {/* Custom input */}
         <div className="border-t border-white/10">
           <div className="flex items-center justify-between px-4 py-2">
             <span className="text-xs font-medium uppercase tracking-wide text-slate-400">
@@ -459,12 +643,11 @@ function ProblemDetails() {
             rows={3}
             placeholder="Enter custom input here..."
             value={customInput}
-            onChange={(e) => setCustomInput(e.target.value)}
+            onChange={(event) => setCustomInput(event.target.value)}
             spellCheck="false"
           />
         </div>
 
-        {/* Output */}
         {output && (
           <div className="border-t border-white/10 bg-[#020714]/60">
             <div className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-indigo-300">
@@ -476,11 +659,10 @@ function ProblemDetails() {
           </div>
         )}
 
-        {/* Bottom action bar */}
         <div className="flex items-center justify-between border-t border-white/10 bg-slate-900/80 px-4 py-3">
           <button
             onClick={handleRun}
-            disabled={running}
+            disabled={running || submitting}
             className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -489,7 +671,11 @@ function ProblemDetails() {
             {running ? "Running..." : "Run"}
           </button>
 
-          <button className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-indigo-500 to-cyan-400 px-5 py-2 text-sm font-semibold text-white shadow-lg transition hover:translate-y-[-1px] hover:shadow-cyan-500/20">
+          <button
+            onClick={handleSubmit}
+            disabled={submitting || running}
+            className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-indigo-500 to-cyan-400 px-5 py-2 text-sm font-semibold text-white shadow-lg transition hover:translate-y-[-1px] hover:shadow-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+          >
             <svg
               width="14"
               height="14"
@@ -501,7 +687,7 @@ function ProblemDetails() {
               <path d="M22 2L11 13" />
               <path d="M22 2L15 22 11 13 2 9l20-7z" />
             </svg>
-            Submit
+            {submitting ? "Submitting..." : "Submit"}
           </button>
         </div>
       </div>

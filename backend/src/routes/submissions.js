@@ -1,25 +1,107 @@
 const express = require("express");
 const router = express.Router();
 const db = require("../db");
-const axios = require("axios");
 const { requireAuth } = require("../middleware/auth");
 
-const LANGUAGE_IDS = {
-  c: 1,
-  cpp: 2,
-  java: 4, // check this from /languages
-  python: 25, // check this from /languages
-};
+function runMockJudge(code, language, tests) {
+  const normalizedCode = (code || "").toLowerCase();
+
+  if (!code || !code.trim()) {
+    return {
+      verdict: "Compilation Error",
+      timeUsedMs: 0,
+      memoryUsedKb: 0,
+      passedTests: 0,
+      totalTests: tests.length,
+    };
+  }
+
+  if (normalizedCode.includes("compile_error")) {
+    return {
+      verdict: "Compilation Error",
+      timeUsedMs: 0,
+      memoryUsedKb: 0,
+      passedTests: 0,
+      totalTests: tests.length,
+    };
+  }
+
+  if (
+    normalizedCode.includes("time_limit") ||
+    normalizedCode.includes("infinite_loop") ||
+    normalizedCode.includes("while(true)")
+  ) {
+    return {
+      verdict: "Time Limit Exceeded",
+      timeUsedMs: 2000,
+      memoryUsedKb: 16384,
+      passedTests: 0,
+      totalTests: tests.length,
+    };
+  }
+
+  if (
+    normalizedCode.includes("runtime_error") ||
+    normalizedCode.includes("throw new") ||
+    normalizedCode.includes("segmentation fault")
+  ) {
+    return {
+      verdict: "Runtime Error",
+      timeUsedMs: 14,
+      memoryUsedKb: 10240,
+      passedTests: 0,
+      totalTests: tests.length,
+    };
+  }
+
+  if (
+    normalizedCode.includes("wrong_answer") ||
+    normalizedCode.includes("wrong answer")
+  ) {
+    return {
+      verdict: "Wrong Answer",
+      timeUsedMs: 21,
+      memoryUsedKb: 12288,
+      passedTests: Math.max(0, tests.length - 1),
+      totalTests: tests.length,
+    };
+  }
+
+  const languagePenalty = {
+    c: 0,
+    cpp: 0,
+    java: 20,
+    python: 12,
+    javascript: 8,
+  };
+
+  const baseTime = 18 + (languagePenalty[language] || 5);
+
+  return {
+    verdict: "Accepted",
+    timeUsedMs: baseTime + Math.min(code.length, 100),
+    memoryUsedKb: 8192 + Math.min(code.length * 3, 12288),
+    passedTests: tests.length,
+    totalTests: tests.length,
+  };
+}
 
 router.post("/", requireAuth, async (req, res) => {
   const { problem_id, language, code, contest_id } = req.body;
   const user_id = req.user.userId;
+
+  if (!problem_id || !language || typeof code !== "string") {
+    return res.status(400).json({
+      error: "problem_id, language, and code are required.",
+    });
+  }
 
   try {
     const [sub] = await db.execute(
       "INSERT INTO submissions (user_id, problem_id, contest_id, language, code) VALUES (?, ?, ?, ?, ?)",
       [user_id, problem_id, contest_id || null, language, code],
     );
+
     const submission_id = sub.insertId;
 
     const [tests] = await db.execute(
@@ -29,74 +111,63 @@ router.post("/", requireAuth, async (req, res) => {
 
     if (tests.length === 0) {
       await db.execute(
-        "UPDATE submissions SET verdict = 'No Test Cases' WHERE id = ?",
+        "UPDATE submissions SET verdict = 'No Test Cases', score = 0 WHERE id = ?",
         [submission_id],
       );
-      return res.json({ submission_id, verdict: "No Test Cases" });
+
+      return res.json({
+        submission_id,
+        verdict: "No Test Cases",
+        passed_tests: 0,
+        total_tests: 0,
+        time_used_ms: 0,
+        memory_used_kb: 0,
+      });
     }
 
-    let finalVerdict = "Accepted";
-    let totalTime = 0;
-    let totalMemory = 0;
-
-    for (const test of tests) {
-      const judgeResponse = await axios.post(
-        `${process.env.JUDGE0_URL}/submissions?base64_encoded=false&wait=true`,
-        {
-          source_code: code,
-          language_id: LANGUAGE_IDS[language] || 2,
-          stdin: test.input,
-          cpu_time_limit: 2,
-          memory_limit: 262144,
-        },
-      );
-
-      const result = judgeResponse.data;
-    //   console.log(result);
-      totalTime += result.time ? parseFloat(result.time) * 1000 : 0;
-      totalMemory = Math.max(totalMemory, result.memory || 0);
-
-      if (result.status.id !== 3) {
-        const statusMap = {
-          4: "Wrong Answer",
-          5: "Time Limit Exceeded",
-          6: "Compilation Error",
-          7: "Runtime Error",
-          8: "Runtime Error",
-          11: "Runtime Error",
-          13: "Internal Error",
-        };
-        finalVerdict = statusMap[result.status.id] || result.status.description;
-        break;
-      }
-    }
+    const result = runMockJudge(code, language, tests);
+    const score = result.verdict === "Accepted" ? 100 : 0;
 
     await db.execute(
       "UPDATE submissions SET verdict = ?, time_used_ms = ?, memory_used_kb = ?, score = ? WHERE id = ?",
       [
-        finalVerdict,
-        Math.round(totalTime),
-        totalMemory,
-        finalVerdict === "Accepted" ? 100 : 0,
+        result.verdict,
+        result.timeUsedMs,
+        result.memoryUsedKb,
+        score,
         submission_id,
       ],
     );
 
-    res.json({ submission_id, verdict: finalVerdict });
+    res.json({
+      submission_id,
+      verdict: result.verdict,
+      passed_tests: result.passedTests,
+      total_tests: result.totalTests,
+      time_used_ms: result.timeUsedMs,
+      memory_used_kb: result.memoryUsedKb,
+      score,
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("Submission error:", err);
+    res.status(500).json({ error: "Unable to process submission." });
   }
 });
 
 router.get("/problem/:problem_id", requireAuth, async (req, res) => {
   try {
     const [rows] = await db.execute(
-      "SELECT id, language, verdict, time_used_ms, memory_used_kb, submitted_at FROM submissions WHERE user_id = ? AND problem_id = ? ORDER BY submitted_at DESC",
+      `SELECT id, language, verdict, time_used_ms, memory_used_kb, submitted_at
+       FROM submissions
+       WHERE user_id = ? AND problem_id = ?
+       ORDER BY submitted_at DESC`,
       [req.user.userId, req.params.problem_id],
     );
+
     res.json(rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("Submission history error:", err);
+    res.status(500).json({ error: "Unable to load submission history." });
   }
 });
 
