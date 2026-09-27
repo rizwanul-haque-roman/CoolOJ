@@ -24,7 +24,9 @@ function Login() {
     try {
       const res = await api.post("/auth/login", formData);
       localStorage.setItem("token", res.data.token);
-      navigate("/problems");
+      localStorage.setItem("user", JSON.stringify(res.data.user));
+      window.dispatchEvent(new Event("authChanged"));
+      navigate("/problems");  
     } catch (err) {
       setError(err.response?.data?.error || "Login failed");
     }
