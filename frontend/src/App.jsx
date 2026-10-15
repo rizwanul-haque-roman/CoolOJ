@@ -12,6 +12,8 @@ import Contests from "./pages/Contests";
 import SubmissionDetails from "./pages/SubmissionDetails";
 import AdminSubmissions from "./pages/AdminSubmissions";
 import AdminUsers from "./pages/AdminUsers";
+import ContestDetails from "./pages/ContestDetails";
+import AdminContests from "./pages/AdminContests";
 
 function App() {
   const location = useLocation();
@@ -23,6 +25,8 @@ function App() {
     if (location.pathname.startsWith("/learn/topic/")) return "Learn Topic";
     if (location.pathname.startsWith("/learn")) return "Learning Hub";
     if (location.pathname.startsWith("/contests")) return "Compete With Others to Judge Your Coding Skill";
+    if (location.pathname.startsWith("/contests/")) return "Contest Details";
+    if (location.pathname.startsWith("/admin/contests")) return "Contest Control";
     if (location.pathname.startsWith("/problems/")) return "Problem Details";
     return "Problems";
   };
@@ -38,6 +42,12 @@ function App() {
       return "Study the lesson and practice in the editor";
     if (location.pathname.startsWith("/learn"))
       return "Explore semester-wise learning and guided coding";
+    if (location.pathname.startsWith("/contests/"))
+      return "View the contest schedule and assigned problems";
+    if (location.pathname.startsWith("/contests"))
+      return "Explore upcoming, live, and completed contests";
+    if (location.pathname.startsWith("/admin/contests"))
+      return "Create contests and manage their assigned problems";
     if (location.pathname.startsWith("/problems/"))
       return "Read the statement and submit your solution";
     return "Browse challenges and sharpen your problem solving";
@@ -70,7 +80,8 @@ function App() {
           <Route path="/" element={<Problems />} />
           <Route path="/problems" element={<Problems />} />
           <Route path="/contests" element={<Contests />} />
-          <Route path="/admin/contests" element={<Admin />} />
+          <Route path="/contests/:id" element={<ContestDetails />} />
+          <Route path="/admin/contests" element={<AdminContests />} />
           <Route path="/problems/:id" element={<ProblemDetails />} />
           <Route path="/submissions/:submissionId" element={<SubmissionDetails />}/>
           <Route path="/submissions" element={<Submissions />} />

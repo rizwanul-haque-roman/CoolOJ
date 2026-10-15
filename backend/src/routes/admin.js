@@ -754,4 +754,41 @@ router.get("/audit-logs", async (req, res) => {
   }
 });
 
+router.get("/problems", async (req, res) => {
+  try {
+    const [rows] = await db.execute(`
+      SELECT
+        p.id,
+        p.title,
+        p.difficulty,
+        p.is_public,
+        p.time_limit_ms,
+        p.memory_limit_kb,
+        COUNT(tc.id) AS test_case_count,
+        SUM(
+          CASE WHEN tc.is_sample = false THEN 1 ELSE 0 END
+        ) AS hidden_test_count
+      FROM problems AS p
+      LEFT JOIN test_cases AS tc
+        ON tc.problem_id = p.id
+      GROUP BY
+        p.id,
+        p.title,
+        p.difficulty,
+        p.is_public,
+        p.time_limit_ms,
+        p.memory_limit_kb
+      ORDER BY p.id DESC
+    `);
+
+    res.json(rows);
+  } catch (err) {
+    console.error("Admin problem list error:", err);
+
+    res.status(500).json({
+      error: "Unable to load the problem bank.",
+    });
+  }
+});
+
 module.exports = router;
