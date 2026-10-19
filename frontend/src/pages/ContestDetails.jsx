@@ -25,7 +25,9 @@ function formatDate(value) {
 
   const date = new Date(value);
 
-  if (Number.isNaN(date.getTime())) return "Invalid date";
+  if (Number.isNaN(date.getTime())) {
+    return "Invalid date";
+  }
 
   return date.toLocaleString([], {
     year: "numeric",
@@ -110,6 +112,17 @@ function ContestDetails() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [now, setNow] = useState(() => Date.now());
 
+  const [hasToken, setHasToken] = useState(() =>
+    Boolean(localStorage.getItem("token")),
+  );
+
+  const [registrationLoading, setRegistrationLoading] =
+    useState(false);
+  const [registered, setRegistered] = useState(false);
+  const [registrationError, setRegistrationError] = useState("");
+  const [registrationMessage, setRegistrationMessage] =
+    useState("");
+
   useEffect(() => {
     const controller = new AbortController();
 
@@ -129,10 +142,9 @@ function ContestDetails() {
       }
 
       try {
-        const response = await api.get(
-          `/contests/${contestId}`,
-          { signal: controller.signal },
-        );
+        const response = await api.get(`/contests/${contestId}`, {
+          signal: controller.signal,
+        });
 
         const data = response.data;
 
@@ -178,12 +190,119 @@ function ContestDetails() {
   }, [id, refreshKey]);
 
   useEffect(() => {
+    setHasToken(Boolean(localStorage.getItem("token")));
+  }, [refreshKey]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadRegistrationStatus() {
+      const contestId = Number(id);
+
+      setRegistered(false);
+      setRegistrationError("");
+      setRegistrationMessage("");
+
+      if (
+        !hasToken ||
+        !Number.isInteger(contestId) ||
+        contestId <= 0
+      ) {
+        setRegistrationLoading(false);
+        return;
+      }
+
+      try {
+        setRegistrationLoading(true);
+
+        const response = await api.get(
+          `/contests/${contestId}/registration`,
+          {
+            signal: controller.signal,
+          },
+        );
+
+        if (!controller.signal.aborted) {
+          setRegistered(Boolean(response.data?.registered));
+        }
+      } catch (err) {
+        if (controller.signal.aborted) return;
+
+        if (err.response?.status === 401) {
+          setHasToken(false);
+          return;
+        }
+
+        setRegistrationError(
+          err.response?.data?.error ||
+            "Unable to check your contest registration.",
+        );
+      } finally {
+        if (!controller.signal.aborted) {
+          setRegistrationLoading(false);
+        }
+      }
+    }
+
+    loadRegistrationStatus();
+
+    return () => controller.abort();
+  }, [id, hasToken, refreshKey]);
+
+  useEffect(() => {
     const timer = window.setInterval(() => {
       setNow(Date.now());
     }, 1000);
 
     return () => window.clearInterval(timer);
   }, []);
+
+  const handleRegister = async () => {
+    const contestId = Number(id);
+
+    if (!hasToken) {
+      setRegistrationError(
+        "Please log in before registering for this contest.",
+      );
+      return;
+    }
+
+    if (!Number.isInteger(contestId) || contestId <= 0) {
+      setRegistrationError("The contest ID is invalid.");
+      return;
+    }
+
+    try {
+      setRegistrationLoading(true);
+      setRegistrationError("");
+      setRegistrationMessage("");
+
+      const response = await api.post(
+        `/contests/${contestId}/register`,
+      );
+
+      setRegistered(true);
+      setRegistrationMessage(
+        response.data?.message ||
+          "You have registered successfully.",
+      );
+    } catch (err) {
+      if (err.response?.status === 401) {
+        setHasToken(false);
+        setRegistrationError(
+          "Your session has expired. Please log in again.",
+        );
+        return;
+      }
+
+      setRegistrationError(
+        err.response?.data?.error ||
+          "Unable to register for this contest.",
+      );
+    } finally {
+      setRegistrationLoading(false);
+    }
+  };
 
   const status = contest ? getStatus(contest, now) : null;
 
@@ -209,7 +328,7 @@ function ContestDetails() {
         <button
           type="button"
           onClick={() => setRefreshKey((value) => value + 1)}
-          disabled={loading}
+          disabled={loading || registrationLoading}
           className="rounded-xl border border-white/10 bg-white/[0.05] px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {loading ? "Loading..." : "Refresh"}
@@ -236,9 +355,7 @@ function ContestDetails() {
               : "Unable to load contest"}
           </h2>
 
-          <p className="mt-3 text-sm text-rose-200">
-            {error}
-          </p>
+          <p className="mt-3 text-sm text-rose-200">{error}</p>
 
           {!notFound && (
             <button
@@ -342,6 +459,68 @@ function ContestDetails() {
               </div>
             )}
 
+            {/* Registration section */}
+            <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="text-base font-semibold text-white">
+                    Contest Registration
+                  </h3>
+
+                  <p className="mt-1 text-sm leading-6 text-slate-400">
+                    Register now to participate when the contest is
+                    live.
+                  </p>
+                </div>
+
+                {!hasToken ? (
+                  <Link
+                    to="/login"
+                    className="inline-flex shrink-0 items-center justify-center rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-2.5 text-sm font-semibold text-cyan-200 transition hover:bg-cyan-400/20"
+                  >
+                    Log in to register
+                  </Link>
+                ) : registrationLoading ? (
+                  <span className="text-sm font-semibold text-cyan-200">
+                    Checking registration...
+                  </span>
+                ) : registered ? (
+                  <span className="inline-flex shrink-0 items-center justify-center rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-2.5 text-sm font-semibold text-emerald-200">
+                    ✓ Already registered
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleRegister}
+                    className="inline-flex shrink-0 items-center justify-center rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-2.5 text-sm font-semibold text-cyan-200 transition hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={status === "ended"}
+                  >
+                    {status === "ended"
+                      ? "Contest finished"
+                      : "Register for Contest"}
+                  </button>
+                )}
+              </div>
+
+              {registrationMessage && (
+                <p
+                  role="status"
+                  className="mt-4 text-sm text-emerald-300"
+                >
+                  {registrationMessage}
+                </p>
+              )}
+
+              {registrationError && (
+                <p
+                  role="alert"
+                  className="mt-4 text-sm text-rose-300"
+                >
+                  {registrationError}
+                </p>
+              )}
+            </div>
+
             {status === "ended" && (
               <p className="mt-5 text-sm text-slate-400">
                 This contest has finished.
@@ -374,7 +553,7 @@ function ContestDetails() {
             <p className="mt-2 text-sm leading-7 text-slate-400">
               Problems assigned to this contest are listed below.
               Contest solving and submissions will be connected in
-              a later step.
+              the next step.
             </p>
 
             {problems.length === 0 ? (
@@ -385,7 +564,7 @@ function ContestDetails() {
               </div>
             ) : (
               <div className="mt-5 overflow-x-auto rounded-2xl border border-white/10">
-                <table className="w-full min-w-[500px] text-sm">
+                <table className="w-full min-w-[650px] text-sm">
                   <thead className="border-b border-white/10 bg-white/[0.04]">
                     <tr>
                       <th
@@ -408,6 +587,12 @@ function ContestDetails() {
                       >
                         Difficulty
                       </th>
+                      <th
+                        scope="col"
+                        className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-400"
+                      >
+                        Action
+                      </th>
                     </tr>
                   </thead>
 
@@ -423,12 +608,45 @@ function ContestDetails() {
                           </span>
                         </td>
 
-                        <td className="px-4 py-4 font-semibold text-white">
-                          {problem.title || "Untitled problem"}
+                        <td className="px-4 py-4 font-semibold">
+                          {status === "live" && registered ? (
+                            <Link
+                              to={`/problems/${problem.id}?contest_id=${contest.id}`}
+                              className="text-white transition hover:text-cyan-300 hover:underline"
+                            >
+                              {problem.title || "Untitled problem"}
+                            </Link>
+                          ) : (
+                            <span className="text-white">
+                              {problem.title || "Untitled problem"}
+                            </span>
+                          )}
                         </td>
 
                         <td className="px-4 py-4 capitalize text-slate-300">
                           {problem.difficulty || "Not specified"}
+                        </td>
+                        <td className="px-4 py-4 text-right">
+                          {status === "live" && registered ? (
+                            <Link
+                              to={`/problems/${problem.id}?contest_id=${contest.id}`}
+                              className="inline-flex rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-400/20"
+                            >
+                              Solve
+                            </Link>
+                          ) : (
+                            <span className="text-xs text-slate-500">
+                              {status === "upcoming"
+                                ? "Available when live"
+                                : status === "ended"
+                                  ? "Contest finished"
+                                  : !hasToken
+                                    ? "Log in first"
+                                    : !registered
+                                      ? "Register first"
+                                      : "Unavailable"}
+                            </span>
+                          )}
                         </td>
                       </tr>
                     ))}

@@ -4,7 +4,8 @@ const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
 
 const COMPILER_API_URL =
-  process.env.ONLINE_COMPILER_API_URL || "https://api.onlinecompiler.io";
+  process.env.ONLINE_COMPILER_API_URL ||
+  "https://api.onlinecompiler.io";
 
 const COMPILER_API_KEY = process.env.ONLINE_COMPILER_API_KEY;
 
@@ -17,7 +18,10 @@ const COMPILER_BY_LANGUAGE = {
 };
 
 function getCompiler(language) {
-  const normalizedLanguage = String(language || "").trim().toLowerCase();
+  const normalizedLanguage = String(language || "")
+    .trim()
+    .toLowerCase();
+
   return COMPILER_BY_LANGUAGE[normalizedLanguage] || null;
 }
 
@@ -68,11 +72,6 @@ function mapCompilerResult(result) {
   const timeSeconds = Number(result?.time || 0);
   const compilerText = getCompilerText(result);
 
-  /*
-   * Timeout must be checked first.
-   * Some compiler APIs use an error exit code after terminating
-   * an infinite loop, so exit_code alone is not enough.
-   */
   if (
     status.includes("timeout") ||
     status.includes("timed_out") ||
@@ -88,10 +87,6 @@ function mapCompilerResult(result) {
     return "Time Limit Exceeded";
   }
 
-  /*
-   * Compilation error detection.
-   * gcc/g++ compiler errors commonly contain `error:`.
-   */
   if (
     status.includes("compile") ||
     status.includes("compilation") ||
@@ -108,9 +103,6 @@ function mapCompilerResult(result) {
     return "Compilation Error";
   }
 
-  /*
-   * Success must explicitly have a zero exit code.
-   */
   if (
     status === "success" ||
     status === "completed" ||
@@ -125,28 +117,16 @@ function mapCompilerResult(result) {
     return "Runtime Error";
   }
 
-  /*
-   * Some services do not return an explicit timeout status.
-   * If your configured external judge has a two-second limit,
-   * a reported runtime at or above approximately two seconds
-   * is treated as a timeout.
-   */
   if (
     timeSeconds >= 2 &&
-    (
-      exitCode === null ||
+    (exitCode === null ||
       exitCode !== 0 ||
       compilerText.includes("killed") ||
-      compilerText.includes("terminated")
-    )
+      compilerText.includes("terminated"))
   ) {
     return "Time Limit Exceeded";
   }
 
-  /*
-   * Runtime failures occur after a program compiles but exits
-   * abnormally, crashes, is killed, or receives a signal.
-   */
   if (
     status.includes("runtime") ||
     status.includes("execution_error") ||
@@ -214,11 +194,6 @@ async function executeCode({ language, code, input }) {
     throw error;
   }
 
-  /*
-   * Temporary debug output.
-   * Keep it while testing the verdicts. It does not expose
-   * your API key because it logs only the compiler response.
-   */
   console.log(
     "Compiler API response:",
     JSON.stringify(payload, null, 2),
@@ -232,7 +207,8 @@ async function executeCode({ language, code, input }) {
     timeUsedMs: Math.round(Number(payload?.time || 0) * 1000),
     memoryUsedKb: Math.round(Number(payload?.memory || 0)),
     exitCode:
-      payload?.exit_code === null || payload?.exit_code === undefined
+      payload?.exit_code === null ||
+      payload?.exit_code === undefined
         ? null
         : Number(payload.exit_code),
   };
@@ -283,14 +259,14 @@ router.post("/run", requireAuth, async (req, res) => {
       input,
     });
 
-    res.json({
+    return res.json({
       ...publicExecutionResult(result),
       saved: false,
     });
   } catch (err) {
     console.error("Run code error:", err);
 
-    res.status(err.statusCode || 502).json({
+    return res.status(err.statusCode || 502).json({
       error: err.message || "Unable to execute code.",
     });
   }
@@ -300,9 +276,17 @@ router.post("/", requireAuth, async (req, res) => {
   const { problem_id, language, code, contest_id } = req.body;
   const userId = req.user.userId;
 
-  if (!problem_id || !language || typeof code !== "string") {
+  const problemId = Number(problem_id);
+
+  if (
+    !Number.isInteger(problemId) ||
+    problemId <= 0 ||
+    !language ||
+    typeof code !== "string"
+  ) {
     return res.status(400).json({
-      error: "problem_id, language, and code are required.",
+      error:
+        "A valid problem_id, language, and code are required.",
     });
   }
 
@@ -324,20 +308,119 @@ router.post("/", requireAuth, async (req, res) => {
     });
   }
 
+  const contestId =
+    contest_id === undefined ||
+    contest_id === null ||
+    contest_id === ""
+      ? null
+      : Number(contest_id);
+
+  if (
+    contestId !== null &&
+    (!Number.isInteger(contestId) || contestId <= 0)
+  ) {
+    return res.status(400).json({
+      error: "contest_id must be a valid positive integer.",
+    });
+  }
+
   try {
     const [problemRows] = await db.execute(
       `
         SELECT id
         FROM problems
         WHERE id = ?
+        LIMIT 1
       `,
-      [problem_id],
+      [problemId],
     );
 
     if (problemRows.length === 0) {
       return res.status(404).json({
         error: "Problem not found.",
       });
+    }
+
+    /*
+     * Contest validation must happen before creating a submission row.
+     * The frontend query parameter cannot be trusted on its own.
+     */
+    if (contestId !== null) {
+      const [contestRows] = await db.execute(
+        `
+          SELECT id, start_time, end_time
+          FROM contests
+          WHERE id = ? AND is_public = true
+          LIMIT 1
+        `,
+        [contestId],
+      );
+
+      if (contestRows.length === 0) {
+        return res.status(404).json({
+          error: "Contest not found or is not public.",
+        });
+      }
+
+      const contest = contestRows[0];
+      const now = new Date();
+      const startTime = new Date(contest.start_time);
+      const endTime = new Date(contest.end_time);
+
+      if (
+        Number.isNaN(startTime.getTime()) ||
+        Number.isNaN(endTime.getTime()) ||
+        endTime <= startTime
+      ) {
+        return res.status(400).json({
+          error: "Contest schedule is invalid.",
+        });
+      }
+
+      if (now < startTime) {
+        return res.status(403).json({
+          error: "This contest has not started yet.",
+        });
+      }
+
+      if (now >= endTime) {
+        return res.status(403).json({
+          error: "This contest has ended.",
+        });
+      }
+
+      const [registrationRows] = await db.execute(
+        `
+          SELECT contest_id
+          FROM contest_registrations
+          WHERE contest_id = ? AND user_id = ?
+          LIMIT 1
+        `,
+        [contestId, userId],
+      );
+
+      if (registrationRows.length === 0) {
+        return res.status(403).json({
+          error: "Register for this contest before submitting.",
+        });
+      }
+
+      const [contestProblemRows] = await db.execute(
+        `
+          SELECT contest_id
+          FROM contest_problems
+          WHERE contest_id = ? AND problem_id = ?
+          LIMIT 1
+        `,
+        [contestId, problemId],
+      );
+
+      if (contestProblemRows.length === 0) {
+        return res.status(403).json({
+          error:
+            "This problem is not assigned to the selected contest.",
+        });
+      }
     }
 
     const [tests] = await db.execute(
@@ -347,7 +430,7 @@ router.post("/", requireAuth, async (req, res) => {
         WHERE problem_id = ? AND is_sample = false
         ORDER BY id ASC
       `,
-      [problem_id],
+      [problemId],
     );
 
     if (tests.length === 0) {
@@ -362,7 +445,7 @@ router.post("/", requireAuth, async (req, res) => {
           (user_id, problem_id, contest_id, language, code)
         VALUES (?, ?, ?, ?, ?)
       `,
-      [userId, problem_id, contest_id || null, language, code],
+      [userId, problemId, contestId, language, code],
     );
 
     const submissionId = submission.insertId;
@@ -435,8 +518,9 @@ router.post("/", requireAuth, async (req, res) => {
       ],
     );
 
-    res.json({
+    return res.json({
       submission_id: submissionId,
+      contest_id: contestId,
       verdict,
       passed_tests: passedTests,
       total_tests: tests.length,
@@ -448,7 +532,7 @@ router.post("/", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("Submission error:", err);
 
-    res.status(500).json({
+    return res.status(500).json({
       error: "Unable to process submission.",
     });
   }
@@ -461,6 +545,7 @@ router.get("/", requireAuth, async (req, res) => {
         SELECT
           s.id,
           s.problem_id,
+          s.contest_id,
           p.title AS problem_title,
           s.language,
           s.verdict,
@@ -477,22 +562,31 @@ router.get("/", requireAuth, async (req, res) => {
       [req.user.userId],
     );
 
-    res.json(rows);
+    return res.json(rows);
   } catch (err) {
     console.error("Global submission history error:", err);
 
-    res.status(500).json({
+    return res.status(500).json({
       error: "Unable to load submission history.",
     });
   }
 });
 
 router.get("/problem/:problem_id", requireAuth, async (req, res) => {
+  const problemId = Number(req.params.problem_id);
+
+  if (!Number.isInteger(problemId) || problemId <= 0) {
+    return res.status(400).json({
+      error: "Invalid problem ID.",
+    });
+  }
+
   try {
     const [rows] = await db.execute(
       `
         SELECT
           id,
+          contest_id,
           language,
           verdict,
           time_used_ms,
@@ -503,14 +597,14 @@ router.get("/problem/:problem_id", requireAuth, async (req, res) => {
         WHERE user_id = ? AND problem_id = ?
         ORDER BY submitted_at DESC, id DESC
       `,
-      [req.user.userId, req.params.problem_id],
+      [req.user.userId, problemId],
     );
 
-    res.json(rows);
+    return res.json(rows);
   } catch (err) {
     console.error("Problem submission history error:", err);
 
-    res.status(500).json({
+    return res.status(500).json({
       error: "Unable to load submission history.",
     });
   }
@@ -578,11 +672,11 @@ router.get("/:submission_id", requireAuth, async (req, res) => {
       delete submission.user_id;
     }
 
-    res.json(submission);
+    return res.json(submission);
   } catch (err) {
     console.error("Submission details error:", err);
 
-    res.status(500).json({
+    return res.status(500).json({
       error: "Unable to load submission details.",
     });
   }
