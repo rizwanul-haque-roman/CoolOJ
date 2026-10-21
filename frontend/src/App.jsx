@@ -14,6 +14,7 @@ import AdminSubmissions from "./pages/AdminSubmissions";
 import AdminUsers from "./pages/AdminUsers";
 import ContestDetails from "./pages/ContestDetails";
 import AdminContests from "./pages/AdminContests";
+import ContestLeaderboardPage from "./pages/ContestLeaderboardPage";
 
 function App() {
   const location = useLocation();
@@ -28,7 +29,13 @@ function App() {
     if (location.pathname.startsWith("/contests/")) return "Contest Details";
     if (location.pathname.startsWith("/admin/contests")) return "Contest Control";
     if (location.pathname.startsWith("/problems/")) return "Problem Details";
-    return "Problems";
+    if (
+      /^\/contests\/[1-9]\d*\/leaderboard\/?$/.test(
+        location.pathname,
+      )
+    ) {
+      return "Contest Leaderboard";
+    }    
   };
 
   const getPageSubtitle = () => {
@@ -50,7 +57,13 @@ function App() {
       return "Create contests and manage their assigned problems";
     if (location.pathname.startsWith("/problems/"))
       return "Read the statement and submit your solution";
-    return "Browse challenges and sharpen your problem solving";
+    if (
+      /^\/contests\/[1-9]\d*\/leaderboard\/?$/.test(
+        location.pathname,
+      )
+    ) {
+      return "Follow solves, penalty time, and contest standings";
+    }
   };
 
   return (
@@ -81,6 +94,9 @@ function App() {
           <Route path="/problems" element={<Problems />} />
           <Route path="/contests" element={<Contests />} />
           <Route path="/contests/:id" element={<ContestDetails />} />
+          <Route path="/admin/contests" element={<AdminContests />} />
+          <Route path="/contests/:id/leaderboard" element={<ContestLeaderboardPage />} />
+          <Route path="/admin" element={<Admin />} />
           <Route path="/admin/contests" element={<AdminContests />} />
           <Route path="/problems/:id" element={<ProblemDetails />} />
           <Route path="/submissions/:submissionId" element={<SubmissionDetails />}/>

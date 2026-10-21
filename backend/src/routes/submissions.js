@@ -259,9 +259,24 @@ router.post("/run", requireAuth, async (req, res) => {
       input,
     });
 
+const executionStatus =
+  result.verdict === "Accepted"
+    ? "Execution successful"
+    : result.verdict;
+
     return res.json({
       ...publicExecutionResult(result),
+
+      // Run reports execution status, not solution correctness.
+      verdict: executionStatus,
+      execution_status: executionStatus,
+      judged: false,
       saved: false,
+
+      message:
+        result.verdict === "Accepted"
+          ? "Code executed successfully. Output was not checked against an expected answer."
+          : "Code did not execute successfully.",
     });
   } catch (err) {
     console.error("Run code error:", err);
@@ -327,15 +342,26 @@ router.post("/", requireAuth, async (req, res) => {
   try {
     const [problemRows] = await db.execute(
       `
-        SELECT id
-        FROM problems
-        WHERE id = ?
-        LIMIT 1
+      SELECT id, is_public
+      FROM problems
+      WHERE id = ?
+      LIMIT 1
       `,
       [problemId],
     );
 
     if (problemRows.length === 0) {
+      return res.status(404).json({
+        error: "Problem not found.",
+      });
+    }
+
+    // Practice submissions are allowed only for public problems.
+    // Private problems must pass the contest checks below.
+    if (
+      contestId === null &&
+      Number(problemRows[0].is_public) !== 1
+    ) {
       return res.status(404).json({
         error: "Problem not found.",
       });

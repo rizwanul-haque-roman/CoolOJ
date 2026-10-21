@@ -394,7 +394,12 @@ function ProblemDetails() {
 
       setOutput(
         [
-          `Verdict: ${result.verdict || "Unknown"}`,
+          `Execution: ${
+            result.execution_status ||
+            result.verdict ||
+            "Unknown"
+          }`,
+          "Note: Custom Run does not check whether the solution is correct.",
           result.output
             ? `Output:\n${result.output}`
             : "Output:\n(no output)",

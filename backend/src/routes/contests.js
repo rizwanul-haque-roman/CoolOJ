@@ -326,8 +326,10 @@ router.post("/:id/register", requireAuth, async (req, res) => {
   }
 });
 
-// Existing leaderboard calculation preserved for now.
-// It still needs the separate unique-solved-problem scoring fix.
+// Contest leaderboard:
+// - 100 points per uniquely solved problem.
+// - 20 minutes per penalized attempt before the first Accepted.
+// - Only solved problems contribute to total penalty time.
 router.get("/:id/leaderboard", async (req, res) => {
   const contestId = parsePositiveId(req.params.id);
 
@@ -336,6 +338,14 @@ router.get("/:id/leaderboard", async (req, res) => {
       error: "Invalid contest ID.",
     });
   }
+
+  const WRONG_ATTEMPT_PENALTY_MINUTES = 20;
+
+  const PENALIZED_VERDICTS = new Set([
+    "Wrong Answer",
+    "Time Limit Exceeded",
+    "Runtime Error",
+  ]);
 
   try {
     const contest = await findPublicContest(contestId);
@@ -346,43 +356,214 @@ router.get("/:id/leaderboard", async (req, res) => {
       });
     }
 
-    const [rows] = await db.execute(
+    if (getContestStatus(contest) === "invalid") {
+      return res.status(400).json({
+        error: "Contest schedule is invalid.",
+      });
+    }
+
+    const [problemRows] = await db.execute(
       `
-        SELECT
-          u.name,
-          u.id AS user_id,
-          COUNT(
-            CASE WHEN s.verdict = 'Accepted' THEN 1 END
-          ) AS solved,
-          SUM(
-            CASE
-              WHEN s.verdict = 'Accepted' THEN 100
-              ELSE 0
-            END
-          ) AS total_score,
-          MIN(
-            CASE
-              WHEN s.verdict = 'Accepted'
-              THEN s.submitted_at
-            END
-          ) AS last_ac_time
-        FROM contest_registrations AS cr
-        INNER JOIN users AS u
-          ON cr.user_id = u.id
-        LEFT JOIN submissions AS s
-          ON s.user_id = u.id
-          AND s.contest_id = cr.contest_id
-        WHERE cr.contest_id = ?
-        GROUP BY u.id, u.name
-        ORDER BY
-          total_score DESC,
-          last_ac_time ASC,
-          u.id ASC
+      SELECT
+        p.id AS problem_id,
+        p.title,
+        cp.serial_letter
+      FROM contest_problems AS cp
+      INNER JOIN problems AS p
+        ON p.id = cp.problem_id
+      WHERE cp.contest_id = ?
+      ORDER BY cp.serial_letter ASC, p.id ASC
       `,
       [contestId],
     );
 
-    return res.json(rows);
+    const [studentRows] = await db.execute(
+      `
+      SELECT DISTINCT
+        u.id AS user_id,
+        u.name
+      FROM contest_registrations AS cr
+      INNER JOIN users AS u
+        ON u.id = cr.user_id
+      WHERE cr.contest_id = ?
+      ORDER BY u.id ASC
+      `,
+      [contestId],
+    );
+
+    const [submissionRows] = await db.execute(
+      `
+      SELECT
+        s.id,
+        s.user_id,
+        s.problem_id,
+        s.verdict,
+        s.submitted_at,
+        TIMESTAMPDIFF(
+          SECOND,
+          c.start_time,
+          s.submitted_at
+        ) AS elapsed_seconds
+      FROM submissions AS s
+      INNER JOIN contests AS c
+        ON c.id = s.contest_id
+      WHERE s.contest_id = ?
+        AND s.submitted_at >= c.start_time
+        AND s.submitted_at < c.end_time
+        AND EXISTS (
+          SELECT 1
+          FROM contest_registrations AS cr
+          WHERE cr.contest_id = s.contest_id
+            AND cr.user_id = s.user_id
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM contest_problems AS cp
+          WHERE cp.contest_id = s.contest_id
+            AND cp.problem_id = s.problem_id
+        )
+      ORDER BY s.submitted_at ASC, s.id ASC
+      `,
+      [contestId],
+    );
+
+    const students = new Map();
+
+    for (const student of studentRows) {
+      const userId = Number(student.user_id);
+
+      const problems = problemRows.map((problem) => ({
+        problem_id: Number(problem.problem_id),
+        serial_letter: problem.serial_letter,
+        title: problem.title,
+        solved: false,
+        wrong_attempts: 0,
+        first_ac_time: null,
+        elapsed_minutes: null,
+        penalty_minutes: 0,
+        total_minutes: 0,
+      }));
+
+      students.set(userId, {
+        user_id: userId,
+        name: student.name,
+        solved: 0,
+        total_score: 0,
+        total_elapsed_minutes: 0,
+        total_penalty_minutes: 0,
+        total_time_minutes: 0,
+        last_ac_time: null,
+        last_solve_seconds: null,
+        problems,
+        problemMap: new Map(
+          problems.map((problem) => [
+            problem.problem_id,
+            problem,
+          ]),
+        ),
+      });
+    }
+
+    for (const submission of submissionRows) {
+      const student = students.get(Number(submission.user_id));
+
+      if (!student) continue;
+
+      const problem = student.problemMap.get(
+        Number(submission.problem_id),
+      );
+
+      // Once solved, later attempts never affect this problem.
+      if (!problem || problem.solved) continue;
+
+      if (submission.verdict === "Accepted") {
+        const elapsedSeconds = Number(
+          submission.elapsed_seconds,
+        );
+
+        const elapsedMinutes = Math.floor(
+          elapsedSeconds / 60,
+        );
+
+        const penaltyMinutes =
+          problem.wrong_attempts *
+          WRONG_ATTEMPT_PENALTY_MINUTES;
+
+        problem.solved = true;
+        problem.first_ac_time = submission.submitted_at;
+        problem.elapsed_minutes = elapsedMinutes;
+        problem.penalty_minutes = penaltyMinutes;
+        problem.total_minutes =
+          elapsedMinutes + penaltyMinutes;
+
+        student.solved += 1;
+        student.total_score += 100;
+        student.total_elapsed_minutes += elapsedMinutes;
+        student.total_penalty_minutes += penaltyMinutes;
+        student.total_time_minutes += problem.total_minutes;
+
+        // Submissions are processed in chronological order.
+        student.last_ac_time = submission.submitted_at;
+        student.last_solve_seconds = elapsedSeconds;
+      } else if (
+        PENALIZED_VERDICTS.has(submission.verdict)
+      ) {
+        problem.wrong_attempts += 1;
+      }
+    }
+
+    const leaderboard = Array.from(students.values());
+
+    leaderboard.sort((a, b) => {
+      if (a.total_score !== b.total_score) {
+        return b.total_score - a.total_score;
+      }
+
+      if (a.total_time_minutes !== b.total_time_minutes) {
+        return a.total_time_minutes - b.total_time_minutes;
+      }
+
+      const aLast =
+        a.last_solve_seconds ?? Number.POSITIVE_INFINITY;
+
+      const bLast =
+        b.last_solve_seconds ?? Number.POSITIVE_INFINITY;
+
+      if (aLast !== bLast) {
+        return aLast < bLast ? -1 : 1;
+      }
+
+      return a.user_id - b.user_id;
+    });
+
+    let previous = null;
+    let currentRank = 0;
+
+    const result = leaderboard.map((student, index) => {
+      const tied =
+        previous !== null &&
+        student.total_score === previous.total_score &&
+        student.total_time_minutes ===
+          previous.total_time_minutes &&
+        student.last_solve_seconds ===
+          previous.last_solve_seconds;
+
+      if (!tied) {
+        currentRank = index + 1;
+      }
+
+      previous = student;
+
+      // Internal lookup map is not part of the API response.
+      const { problemMap, ...publicStudent } = student;
+
+      return {
+        rank: currentRank,
+        ...publicStudent,
+      };
+    });
+
+    return res.json(result);
   } catch (err) {
     console.error("Contest leaderboard error:", err);
 
