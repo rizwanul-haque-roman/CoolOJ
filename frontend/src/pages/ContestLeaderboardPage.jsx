@@ -1,29 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import api from "../api/axios";
+import usePublicContest, { getPublicContestStatus as getContestStatus } from "../hooks/usePublicContest";
+import ContestNotices from "../components/ContestNotices";
 import ContestLeaderboard from "./ContestLeaderboard";
 
-function getContestStatus(contest, now) {
-  if (!contest.start_time || !contest.end_time) {
-    return "invalid";
-  }
-
-  const start = new Date(contest.start_time).getTime();
-  const end = new Date(contest.end_time).getTime();
-
-  if (
-    !Number.isFinite(start) ||
-    !Number.isFinite(end) ||
-    end <= start
-  ) {
-    return "invalid";
-  }
-
-  if (now < start) return "upcoming";
-  if (now < end) return "live";
-
-  return "ended";
-}
 
 const STATUS_LABELS = {
   upcoming: "Upcoming",
@@ -51,84 +32,17 @@ function getStatusStyle(status) {
 function ContestLeaderboardPage() {
   const { id } = useParams();
 
-  const [contest, setContest] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
-  const [now, setNow] = useState(() => Date.now());
+  const { contest, loading, error, notFound, warning, now } = usePublicContest(id, refreshKey);
 
   const validId =
     typeof id === "string" &&
     /^[1-9]\d*$/.test(id) &&
     Number.isSafeInteger(Number(id));
 
-  useEffect(() => {
-    const controller = new AbortController();
 
-    async function loadContest() {
-      setLoading(true);
-      setError("");
-      setContest(null);
 
-      if (!validId) {
-        setError("The contest ID is invalid.");
-        setLoading(false);
-        return;
-      }
 
-      try {
-        const response = await api.get(
-          `/contests/${Number(id)}`,
-          { signal: controller.signal },
-        );
-
-        const data = response.data;
-
-        if (
-          !data ||
-          typeof data !== "object" ||
-          Array.isArray(data) ||
-          Number(data.id) !== Number(id) ||
-          !Array.isArray(data.problems)
-        ) {
-          throw new Error(
-            "The server returned an unexpected contest response.",
-          );
-        }
-
-        if (controller.signal.aborted) return;
-
-        setContest(data);
-        setNow(Date.now());
-      } catch (err) {
-        if (controller.signal.aborted) return;
-
-        setError(
-          err.response?.status === 404
-            ? "This contest does not exist or is not public."
-            : err.response?.data?.error ||
-                err.message ||
-                "Unable to load the contest.",
-        );
-      } finally {
-        if (!controller.signal.aborted) {
-          setLoading(false);
-        }
-      }
-    }
-
-    loadContest();
-
-    return () => controller.abort();
-  }, [id, validId, refreshKey]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setNow(Date.now());
-    }, 1000);
-
-    return () => window.clearInterval(timer);
-  }, []);
 
   const status = contest
     ? getContestStatus(contest, now)
@@ -190,6 +104,7 @@ function ContestLeaderboardPage() {
 
       {!loading && !error && contest && (
         <>
+          <ContestNotices contest={contest} warning={warning} />
           <section className="rounded-3xl border border-white/10 bg-slate-900/50 p-5 shadow-2xl backdrop-blur-xl sm:p-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-300">

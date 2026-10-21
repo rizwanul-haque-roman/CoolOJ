@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import api from "../api/axios";
 
@@ -65,6 +65,7 @@ function AdminContests() {
     useState(0);
 
   const isAdmin = user?.role === "admin";
+  const problemActionBusy = useRef(false);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -168,6 +169,18 @@ function AdminContests() {
     return () => controller.abort();
   }, [isAdmin, selectedContestId, assignmentRefreshKey]);
 
+  useEffect(() => {
+    if (!isAdmin || !selectedContestId) return;
+    function visible() {
+      if (document.visibilityState === "visible" && !problemActionBusy.current) {
+        setAssignmentRefreshKey(value=>value+1);
+        setRefreshKey(value=>value+1);
+      }
+    }
+    document.addEventListener("visibilitychange",visible);
+    return ()=>document.removeEventListener("visibilitychange",visible);
+  },[isAdmin,selectedContestId]);
+
   const selectedContest = contests.find(
     (contest) =>
       String(contest.id) === String(selectedContestId),
@@ -176,7 +189,7 @@ function AdminContests() {
   const availableProblems = problems.filter(
     (problem) =>
       !assignedProblems.some(
-        (assigned) => Number(assigned.id) === Number(problem.id),
+        (assigned) => Number(assigned.id) === Number(problem.id) && !assigned.withdrawn_at,
       ),
   );
 
@@ -245,76 +258,44 @@ function AdminContests() {
 
   const handleAddProblem = async (event) => {
     event.preventDefault();
-
-    if (!selectedContestId || !selectedProblemId || busy) return;
-
-    const problem = problems.find(
-      (item) => String(item.id) === selectedProblemId,
-    );
-
-    if (!problem || Number(problem.hidden_test_count) < 1) {
-      setError(
-        "Choose a problem with at least one hidden test case.",
-      );
-      return;
-    }
-
-    try {
-      setBusy(true);
-      setError("");
-      setSuccess("");
-
-      await api.post(
-        `/admin/contests/${selectedContestId}/problems`,
-        { problem_id: Number(selectedProblemId) },
-      );
-
+    if (!selectedContestId || !selectedProblemId || busy || problemActionBusy.current) return;
+    const problem=problems.find(item=>String(item.id)===selectedProblemId);
+    if (!problem || Number(problem.hidden_test_count)<1) { setError("Choose a problem with hidden test cases.");return; }
+    const withdrawn=assignedProblems.find(item=>Number(item.id)===Number(selectedProblemId)&&item.withdrawn_at);
+    const reason=window.prompt(withdrawn ? "Reason for restoring this problem (students will see it):" : "Reason for adding this problem (students will see it):");
+    if(reason===null)return;
+    if(!reason.trim()||reason.trim().length>1000){setError("Enter a reason between 1 and 1000 characters.");return;}
+    const impact=withdrawn ? "Its earlier eligible submissions, points, and penalties will count again. Its original letter is retained." : "Students will see this new problem. Solve time is measured from the original contest start.";
+    if(!window.confirm(`${withdrawn ? "Restore" : "Add"} ${problem.title}?\n\n${impact}\n\nReason: ${reason.trim()}`))return;
+    problemActionBusy.current=true;
+    try{
+      setBusy(true);setError("");setSuccess("");
+      const response=await api.post(`/admin/contests/${selectedContestId}/problems`,{problem_id:Number(selectedProblemId),expected_revision:Number(selectedContest.revision),reason:reason.trim()});
       setSelectedProblemId("");
-      setAssignmentRefreshKey((value) => value + 1);
-      setRefreshKey((value) => value + 1);
-
-      setSuccess("Problem added to the contest.");
-    } catch (err) {
-      setError(
-        err.response?.data?.error ||
-          "Unable to add the problem.",
-      );
-    } finally {
-      setBusy(false);
-    }
+      setAssignmentRefreshKey(value=>value+1);setRefreshKey(value=>value+1);
+      setSuccess(response.data.message||"Contest problem updated.");
+    }catch(err){
+      setError(err.response?.data?.error||"Unable to update this contest problem.");
+      setAssignmentRefreshKey(value=>value+1);setRefreshKey(value=>value+1);
+    }finally{problemActionBusy.current=false;setBusy(false);}
   };
 
   const handleRemoveProblem = async (problem) => {
-    if (busy) return;
-
-    const confirmed = window.confirm(
-      `Remove "${problem.title}" from this contest? ` +
-        "The original problem will remain in the problem bank.",
-    );
-
-    if (!confirmed) return;
-
-    try {
-      setBusy(true);
-      setError("");
-      setSuccess("");
-
-      await api.delete(
-        `/admin/contests/${selectedContestId}/problems/${problem.id}`,
-      );
-
-      setAssignmentRefreshKey((value) => value + 1);
-      setRefreshKey((value) => value + 1);
-
-      setSuccess("Problem removed from the contest.");
-    } catch (err) {
-      setError(
-        err.response?.data?.error ||
-          "Unable to remove the problem.",
-      );
-    } finally {
-      setBusy(false);
-    }
+    if(busy||problemActionBusy.current||problem.withdrawn_at)return;
+    const reason=window.prompt(`Reason for withdrawing ${problem.title} (students will see it):`);
+    if(reason===null)return;
+    if(!reason.trim()||reason.trim().length>1000){setError("Enter a reason between 1 and 1000 characters.");return;}
+    if(!window.confirm(`Withdraw problem ${problem.serial_letter}: ${problem.title}?\n\nIts points, solved count, and penalty time will be excluded from everyone's standings. New submissions will be blocked. Existing submission history will be kept.\n\nReason: ${reason.trim()}`))return;
+    problemActionBusy.current=true;
+    try{
+      setBusy(true);setError("");setSuccess("");
+      const response=await api.delete(`/admin/contests/${selectedContestId}/problems/${problem.id}`,{data:{reason:reason.trim(),expected_revision:Number(selectedContest.revision)}});
+      setAssignmentRefreshKey(value=>value+1);setRefreshKey(value=>value+1);
+      setSuccess(response.data.message||"Problem withdrawn.");
+    }catch(err){
+      setError(err.response?.data?.error||"Unable to withdraw this problem.");
+      setAssignmentRefreshKey(value=>value+1);setRefreshKey(value=>value+1);
+    }finally{problemActionBusy.current=false;setBusy(false);}
   };
 
   if (!isAdmin) {
@@ -519,6 +500,13 @@ function AdminContests() {
                   {formatDate(selectedContest.end_time)}
                 </p>
 
+                <Link
+                  to={`/admin/contests/${selectedContest.id}`}
+                  className="mt-4 mr-4 inline-flex rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-2.5 text-sm font-semibold text-cyan-200 hover:bg-cyan-400/20"
+                >
+                  Open control center →
+                </Link>
+
                 {Number(selectedContest.is_public) === 1 && (
                   <Link
                     to={`/contests/${selectedContest.id}`}
@@ -574,7 +562,7 @@ function AdminContests() {
                                 Number(problem.hidden_test_count) < 1
                               }
                             >
-                              #{problem.id} — {problem.title}
+                              #{problem.id} — {problem.title}{assignedProblems.some(item => Number(item.id) === Number(problem.id) && item.withdrawn_at) ? " — Restore withdrawn problem" : ""}
                               {Number(problem.hidden_test_count) < 1
                                 ? " — needs hidden tests"
                                 : ""}
@@ -588,11 +576,11 @@ function AdminContests() {
                         disabled={
                           busy ||
                           !selectedProblemId ||
-                          assignedProblems.length >= 26
+                          (assignedProblems.length >= 26 && !assignedProblems.some(item => String(item.id) === selectedProblemId && item.withdrawn_at))
                         }
                         className={buttonClass}
                       >
-                        {busy ? "Saving..." : "Add Problem"}
+                        {busy ? "Saving..." : assignedProblems.some(item => String(item.id) === selectedProblemId && item.withdrawn_at) ? "Restore Problem" : "Add Problem"}
                       </button>
                     </form>
 
@@ -605,8 +593,7 @@ function AdminContests() {
 
                     <p className="mt-3 text-xs leading-6 text-slate-500">
                       Problems without hidden tests are disabled in
-                      this picker. Removing a problem from a contest
-                      does not delete the original problem.
+                      this picker. Withdrawn problems keep their submissions and letter, but no longer contribute to standings.
                     </p>
 
                     {assignedProblems.length === 0 ? (
@@ -645,6 +632,8 @@ function AdminContests() {
 
                                 <td className="px-4 py-4 text-white">
                                   {problem.title}
+                                  {problem.withdrawn_at && <span className="ml-2 text-xs font-semibold text-amber-300">Withdrawn — excluded from standings</span>}
+                                  {problem.withdrawn_at && <p className="mt-1 text-xs font-normal text-slate-500">{problem.withdrawn_reason}</p>}
                                 </td>
 
                                 <td className="px-4 py-4 capitalize text-slate-400">
@@ -654,13 +643,13 @@ function AdminContests() {
                                 <td className="px-4 py-4 text-right">
                                   <button
                                     type="button"
-                                    disabled={busy}
+                                    disabled={busy || Boolean(problem.withdrawn_at)}
                                     onClick={() =>
                                       handleRemoveProblem(problem)
                                     }
                                     className="rounded-xl border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs font-semibold text-rose-200 transition hover:bg-rose-400/20 disabled:opacity-40"
                                   >
-                                    Remove
+                                    {problem.withdrawn_at ? "Withdrawn" : "Withdraw"}
                                   </button>
                                 </td>
                               </tr>

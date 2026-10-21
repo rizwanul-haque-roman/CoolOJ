@@ -1,6 +1,9 @@
 const express = require("express");
 const router = express.Router();
 const db = require("../db");
+const {
+  admitSubmission,
+} = require("../utils/admitSubmission");
 const { requireAuth } = require("../middleware/auth");
 
 const COMPILER_API_URL =
@@ -340,141 +343,13 @@ router.post("/", requireAuth, async (req, res) => {
   }
 
   try {
-    const [problemRows] = await db.execute(
-      `
-      SELECT id, is_public
-      FROM problems
-      WHERE id = ?
-      LIMIT 1
-      `,
-      [problemId],
-    );
-
-    if (problemRows.length === 0) {
-      return res.status(404).json({
-        error: "Problem not found.",
-      });
-    }
-
-    // Practice submissions are allowed only for public problems.
-    // Private problems must pass the contest checks below.
-    if (
-      contestId === null &&
-      Number(problemRows[0].is_public) !== 1
-    ) {
-      return res.status(404).json({
-        error: "Problem not found.",
-      });
-    }
-
-    /*
-     * Contest validation must happen before creating a submission row.
-     * The frontend query parameter cannot be trusted on its own.
-     */
-    if (contestId !== null) {
-      const [contestRows] = await db.execute(
-        `
-          SELECT id, start_time, end_time
-          FROM contests
-          WHERE id = ? AND is_public = true
-          LIMIT 1
-        `,
-        [contestId],
-      );
-
-      if (contestRows.length === 0) {
-        return res.status(404).json({
-          error: "Contest not found or is not public.",
-        });
-      }
-
-      const contest = contestRows[0];
-      const now = new Date();
-      const startTime = new Date(contest.start_time);
-      const endTime = new Date(contest.end_time);
-
-      if (
-        Number.isNaN(startTime.getTime()) ||
-        Number.isNaN(endTime.getTime()) ||
-        endTime <= startTime
-      ) {
-        return res.status(400).json({
-          error: "Contest schedule is invalid.",
-        });
-      }
-
-      if (now < startTime) {
-        return res.status(403).json({
-          error: "This contest has not started yet.",
-        });
-      }
-
-      if (now >= endTime) {
-        return res.status(403).json({
-          error: "This contest has ended.",
-        });
-      }
-
-      const [registrationRows] = await db.execute(
-        `
-          SELECT contest_id
-          FROM contest_registrations
-          WHERE contest_id = ? AND user_id = ?
-          LIMIT 1
-        `,
-        [contestId, userId],
-      );
-
-      if (registrationRows.length === 0) {
-        return res.status(403).json({
-          error: "Register for this contest before submitting.",
-        });
-      }
-
-      const [contestProblemRows] = await db.execute(
-        `
-          SELECT contest_id
-          FROM contest_problems
-          WHERE contest_id = ? AND problem_id = ?
-          LIMIT 1
-        `,
-        [contestId, problemId],
-      );
-
-      if (contestProblemRows.length === 0) {
-        return res.status(403).json({
-          error:
-            "This problem is not assigned to the selected contest.",
-        });
-      }
-    }
-
-    const [tests] = await db.execute(
-      `
-        SELECT input, expected_output
-        FROM test_cases
-        WHERE problem_id = ? AND is_sample = false
-        ORDER BY id ASC
-      `,
-      [problemId],
-    );
-
-    if (tests.length === 0) {
-      return res.status(400).json({
-        error: "This problem has no hidden test cases yet.",
-      });
-    }
-
-    const [submission] = await db.execute(
-      `
-        INSERT INTO submissions
-          (user_id, problem_id, contest_id, language, code)
-        VALUES (?, ?, ?, ?, ?)
-      `,
-      [userId, problemId, contestId, language, code],
-    );
-
-    const submissionId = submission.insertId;
+    const { submissionId, tests } = await admitSubmission({
+      userId,
+      problemId,
+      contestId,
+      language,
+      code,
+    });
 
     let verdict = "Accepted";
     let passedTests = 0;
@@ -556,12 +431,22 @@ router.post("/", requireAuth, async (req, res) => {
       error: judgeError || undefined,
     });
   } catch (err) {
-    console.error("Submission error:", err);
+      console.error("Submission error:", err);
 
-    return res.status(500).json({
-      error: "Unable to process submission.",
-    });
-  }
+      const statusCode =
+        Number.isInteger(err.statusCode) &&
+        err.statusCode >= 400 &&
+        err.statusCode < 500
+          ? err.statusCode
+          : 500;
+
+      return res.status(statusCode).json({
+        error:
+          statusCode < 500
+            ? err.message
+            : "Unable to process submission.",
+      });
+    }
 });
 
 router.get("/", requireAuth, async (req, res) => {

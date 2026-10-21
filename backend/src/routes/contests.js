@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
+const { getContestClock } = require("../utils/contestClock");
 
 function parsePositiveId(value) {
   if (
@@ -17,26 +18,7 @@ function parsePositiveId(value) {
 }
 
 function getContestStatus(contest) {
-  if (!contest.start_time || !contest.end_time) {
-    return "invalid";
-  }
-
-  const startTime = new Date(contest.start_time).getTime();
-  const endTime = new Date(contest.end_time).getTime();
-  const now = Date.now();
-
-  if (
-    !Number.isFinite(startTime) ||
-    !Number.isFinite(endTime) ||
-    endTime <= startTime
-  ) {
-    return "invalid";
-  }
-
-  if (now < startTime) return "upcoming";
-  if (now >= endTime) return "ended";
-
-  return "live";
+  return getContestClock(contest).status;
 }
 
 async function findPublicContest(contestId) {
@@ -204,6 +186,7 @@ router.get(
             ON p.id = cp.problem_id
           WHERE cp.contest_id = ?
             AND cp.problem_id = ?
+            AND cp.withdrawn_at IS NULL
           LIMIT 1
         `,
         [contestId, problemId],
@@ -212,7 +195,7 @@ router.get(
       if (problemRows.length === 0) {
         return res.status(403).json({
           error:
-            "This problem is not assigned to the selected contest.",
+            "This problem is not assigned to this contest or has been withdrawn.",
         });
       }
 
@@ -371,7 +354,7 @@ router.get("/:id/leaderboard", async (req, res) => {
       FROM contest_problems AS cp
       INNER JOIN problems AS p
         ON p.id = cp.problem_id
-      WHERE cp.contest_id = ?
+      WHERE cp.contest_id = ? AND cp.withdrawn_at IS NULL
       ORDER BY cp.serial_letter ASC, p.id ASC
       `,
       [contestId],
@@ -409,7 +392,7 @@ router.get("/:id/leaderboard", async (req, res) => {
         ON c.id = s.contest_id
       WHERE s.contest_id = ?
         AND s.submitted_at >= c.start_time
-        AND s.submitted_at < c.end_time
+        AND s.submitted_at < COALESCE(c.ended_at, c.end_time)
         AND EXISTS (
           SELECT 1
           FROM contest_registrations AS cr
@@ -421,6 +404,7 @@ router.get("/:id/leaderboard", async (req, res) => {
           FROM contest_problems AS cp
           WHERE cp.contest_id = s.contest_id
             AND cp.problem_id = s.problem_id
+            AND cp.withdrawn_at IS NULL
         )
       ORDER BY s.submitted_at ASC, s.id ASC
       `,
@@ -603,15 +587,43 @@ router.get("/:id", async (req, res) => {
         FROM contest_problems AS cp
         INNER JOIN problems AS p
           ON cp.problem_id = p.id
-        WHERE cp.contest_id = ?
+        WHERE cp.contest_id = ? AND cp.withdrawn_at IS NULL
         ORDER BY cp.serial_letter ASC
+      `,
+      [contestId],
+    );
+
+    const [clockRows] = await db.execute(
+      "SELECT NOW(3) AS server_now",
+    );
+
+    const clock = getContestClock(
+      contest,
+      clockRows[0].server_now,
+    );
+
+    const [announcements] = await db.execute(
+      `
+      SELECT
+        id,
+        contest_revision,
+        event_type,
+        message,
+        created_at
+      FROM contest_announcements
+      WHERE contest_id = ?
+      ORDER BY id DESC
+      LIMIT 20
       `,
       [contestId],
     );
 
     return res.json({
       ...contest,
+      ...clock,
+      timezone: "Asia/Dhaka",
       problems,
+      announcements,
     });
   } catch (err) {
     console.error("Contest details error:", err);

@@ -23,6 +23,8 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/problems', require('./routes/problems'));
 app.use('/api/submissions', require('./routes/submissions'));
 app.use('/api/contests', require('./routes/contests'));
+app.use('/api/profiles', require('./routes/profiles'));
+app.use('/api/admin/dashboard', require('./routes/adminDashboard'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/learn',    require('./routes/learn'));
 

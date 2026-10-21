@@ -1,9 +1,11 @@
 const express = require("express");
 const router = express.Router();
 const db = require("../db");
+const { changeContestProblem } = require("../utils/liveContestProblems");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
 
 router.use(requireAuth, requireAdmin);
+router.use(require("./adminContestControls"));
 
 const VALID_ROLES = ["student", "admin"];
 const VALID_STATUSES = ["active", "suspended", "deleted"];
@@ -196,37 +198,13 @@ router.post("/contests", async (req, res) => {
   }
 });
 
-router.get("/contests", async (req, res) => {
-  try {
-    const [rows] = await db.execute(
-      `SELECT
-        c.id,
-        c.title,
-        c.description,
-        c.start_time,
-        c.end_time,
-        c.created_by,
-        c.is_public,
-        COUNT(DISTINCT cp.problem_id) AS problem_count
-      FROM contests AS c
-      LEFT JOIN contest_problems AS cp
-        ON cp.contest_id = c.id
-      GROUP BY
-        c.id,
-        c.title,
-        c.description,
-        c.start_time,
-        c.end_time,
-        c.created_by,
-        c.is_public
-      ORDER BY c.start_time DESC, c.id DESC`,
-    );
-
-    res.json(rows);
-  } catch (err) {
-    console.error("Get admin contests error:", err);
-    res.status(500).json({ error: "Unable to load contests." });
-  }
+router.get("/contests", async (req,res)=>{
+  try{
+    const [rows]=await db.execute(`SELECT c.*,
+      (SELECT COUNT(*) FROM contest_problems cp WHERE cp.contest_id=c.id AND cp.withdrawn_at IS NULL) AS problem_count
+      FROM contests c ORDER BY c.start_time DESC,c.id DESC`);
+    return res.json(rows);
+  }catch(error){console.error("Admin contest list error:",error);return res.status(500).json({error:"Unable to load contests."});}
 });
 
 router.get("/contests/:contestId/problems", async (req, res) => {
@@ -253,7 +231,9 @@ router.get("/contests/:contestId/problems", async (req, res) => {
         p.difficulty,
         p.time_limit_ms,
         p.memory_limit_kb,
-        cp.serial_letter
+        cp.serial_letter,
+          cp.withdrawn_at,
+          cp.withdrawn_reason
       FROM contest_problems AS cp
       INNER JOIN problems AS p
         ON p.id = cp.problem_id
@@ -269,129 +249,23 @@ router.get("/contests/:contestId/problems", async (req, res) => {
   }
 });
 
-router.post("/contests/:contestId/problems", async (req, res) => {
-  const contestId = Number(req.params.contestId);
-  const problemId = Number(req.body.problem_id);
-
-  if (!Number.isInteger(contestId) || contestId <= 0) {
-    return res.status(400).json({ error: "Invalid contest ID." });
-  }
-
-  if (!Number.isInteger(problemId) || problemId <= 0) {
-    return res.status(400).json({ error: "A valid problem_id is required." });
-  }
-
-  try {
-    const [contestRows] = await db.execute(
-      "SELECT id FROM contests WHERE id = ?",
-      [contestId],
-    );
-
-    if (contestRows.length === 0) {
-      return res.status(404).json({ error: "Contest not found." });
-    }
-
-    const [problemRows] = await db.execute(
-      "SELECT id FROM problems WHERE id = ?",
-      [problemId],
-    );
-
-    if (problemRows.length === 0) {
-      return res.status(404).json({ error: "Problem not found." });
-    }
-
-    const [existingRows] = await db.execute(
-      `SELECT id
-       FROM contest_problems
-       WHERE contest_id = ? AND problem_id = ?`,
-      [contestId, problemId],
-    );
-
-    if (existingRows.length > 0) {
-      return res.status(409).json({
-        error: "This problem is already assigned to this contest.",
-      });
-    }
-
-    const [assignedRows] = await db.execute(
-      `SELECT serial_letter
-       FROM contest_problems
-       WHERE contest_id = ?
-       ORDER BY serial_letter DESC
-       LIMIT 1`,
-      [contestId],
-    );
-
-    let serialLetter = "A";
-
-    if (assignedRows.length > 0) {
-      const lastLetter = assignedRows[0].serial_letter;
-      serialLetter = String.fromCharCode(lastLetter.charCodeAt(0) + 1);
-    }
-
-    if (serialLetter > "Z") {
-      return res.status(400).json({
-        error: "A contest can contain at most 26 problems.",
-      });
-    }
-
-    await db.execute(
-      `INSERT INTO contest_problems
-        (contest_id, problem_id, serial_letter)
-       VALUES (?, ?, ?)`,
-      [contestId, problemId, serialLetter],
-    );
-
-    res.status(201).json({
-      message: "Problem added to contest.",
-      contest_id: contestId,
-      problem_id: problemId,
-      serial_letter: serialLetter,
+async function handleLiveProblem(req,res,action){
+  try{
+    const result=await changeContestProblem({
+      contestId:req.params.contestId,
+      problemId:action==="add"?req.body?.problem_id:req.params.problemId,
+      adminId:req.user.userId,action,
+      reason:req.body?.reason,expectedRevision:req.body?.expected_revision,
     });
-  } catch (err) {
-    console.error("Add contest problem error:", err);
-    res.status(500).json({ error: "Unable to add problem to contest." });
+    return res.status(action==="add"?201:200).json(result);
+  }catch(error){
+    const expected=Number.isInteger(error.statusCode)&&error.statusCode>=400&&error.statusCode<500;
+    if(!expected)console.error("Live contest problem error:",error);
+    return res.status(expected?error.statusCode:500).json({error:expected?error.message:"Unable to change contest problems."});
   }
-});
-
-router.delete(
-  "/contests/:contestId/problems/:problemId",
-  async (req, res) => {
-    const contestId = Number(req.params.contestId);
-    const problemId = Number(req.params.problemId);
-
-    if (!Number.isInteger(contestId) || contestId <= 0) {
-      return res.status(400).json({ error: "Invalid contest ID." });
-    }
-
-    if (!Number.isInteger(problemId) || problemId <= 0) {
-      return res.status(400).json({ error: "Invalid problem ID." });
-    }
-
-    try {
-      const [result] = await db.execute(
-        `DELETE FROM contest_problems
-         WHERE contest_id = ? AND problem_id = ?`,
-        [contestId, problemId],
-      );
-
-      if (result.affectedRows === 0) {
-        return res.status(404).json({
-          error: "That problem is not assigned to this contest.",
-        });
-      }
-
-      res.json({
-        message: "Problem removed from contest.",
-      });
-    } catch (err) {
-      console.error("Remove contest problem error:", err);
-      res.status(500).json({
-        error: "Unable to remove problem from contest.",
-      });
-    }
-  },
-);
+}
+router.post("/contests/:contestId/problems",(req,res)=>handleLiveProblem(req,res,"add"));
+router.delete("/contests/:contestId/problems/:problemId",(req,res)=>handleLiveProblem(req,res,"withdraw"));
 
 router.get("/submissions", async (req, res) => {
   try {

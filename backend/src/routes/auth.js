@@ -11,6 +11,7 @@ function createToken(user) {
     {
       userId: user.id,
       role: user.role,
+      tokenVersion: Number(user.token_version || 0),
     },
     process.env.JWT_SECRET,
     {
@@ -122,6 +123,7 @@ router.post("/login", async (req, res) => {
         email,
         password_hash,
         role,
+        token_version,
         status
       FROM users
       WHERE LOWER(email) = LOWER(?)
@@ -164,7 +166,7 @@ router.post("/login", async (req, res) => {
       status: user.status,
     };
 
-    const token = createToken(safeUser);
+    const token = createToken(user);
 
     return res.json({
       token,

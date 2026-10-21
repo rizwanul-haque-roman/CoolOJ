@@ -1,24 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import api from "../api/axios";
+import usePublicContest, { getPublicContestStatus as getStatus } from "../hooks/usePublicContest";
+import ContestNotices from "../components/ContestNotices";
 
-function getStatus(contest, now) {
-  const start = new Date(contest.start_time).getTime();
-  const end = new Date(contest.end_time).getTime();
-
-  if (
-    !Number.isFinite(start) ||
-    !Number.isFinite(end) ||
-    end <= start
-  ) {
-    return "invalid";
-  }
-
-  if (now < start) return "upcoming";
-  if (now < end) return "live";
-
-  return "ended";
-}
 
 function formatDate(value) {
   if (!value) return "Not scheduled";
@@ -105,12 +90,8 @@ const STATUS_LABELS = {
 function ContestDetails() {
   const { id } = useParams();
 
-  const [contest, setContest] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [notFound, setNotFound] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [now, setNow] = useState(() => Date.now());
+  const { contest, loading, error, notFound, warning, now } = usePublicContest(id, refreshKey);
 
   const [hasToken, setHasToken] = useState(() =>
     Boolean(localStorage.getItem("token")),
@@ -123,71 +104,7 @@ function ContestDetails() {
   const [registrationMessage, setRegistrationMessage] =
     useState("");
 
-  useEffect(() => {
-    const controller = new AbortController();
 
-    async function loadContest() {
-      setLoading(true);
-      setError("");
-      setNotFound(false);
-      setContest(null);
-
-      const contestId = Number(id);
-
-      if (!Number.isInteger(contestId) || contestId <= 0) {
-        setError("The contest ID is invalid.");
-        setNotFound(true);
-        setLoading(false);
-        return;
-      }
-
-      try {
-        const response = await api.get(`/contests/${contestId}`, {
-          signal: controller.signal,
-        });
-
-        const data = response.data;
-
-        if (
-          !data ||
-          typeof data !== "object" ||
-          Array.isArray(data) ||
-          !data.id ||
-          !Array.isArray(data.problems)
-        ) {
-          throw new Error(
-            "The server returned an unexpected contest response.",
-          );
-        }
-
-        if (!controller.signal.aborted) {
-          setContest(data);
-          setNow(Date.now());
-        }
-      } catch (err) {
-        if (controller.signal.aborted) return;
-
-        const missing = err.response?.status === 404;
-
-        setNotFound(missing);
-        setError(
-          missing
-            ? "This contest does not exist or is not public."
-            : err.response?.data?.error ||
-                err.message ||
-                "Unable to load the contest.",
-        );
-      } finally {
-        if (!controller.signal.aborted) {
-          setLoading(false);
-        }
-      }
-    }
-
-    loadContest();
-
-    return () => controller.abort();
-  }, [id, refreshKey]);
 
   useEffect(() => {
     setHasToken(Boolean(localStorage.getItem("token")));
@@ -249,13 +166,7 @@ function ContestDetails() {
     return () => controller.abort();
   }, [id, hasToken, refreshKey]);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setNow(Date.now());
-    }, 1000);
 
-    return () => window.clearInterval(timer);
-  }, []);
 
   const handleRegister = async () => {
     const contestId = Number(id);
@@ -310,7 +221,7 @@ function ContestDetails() {
     status === "upcoming"
       ? new Date(contest.start_time).getTime()
       : status === "live"
-        ? new Date(contest.end_time).getTime()
+        ? new Date(contest.effective_end_time || contest.ended_at || contest.end_time).getTime()
         : null;
 
   const problems = contest?.problems || [];
@@ -387,6 +298,7 @@ function ContestDetails() {
 
       {!loading && !error && contest && (
         <>
+          <ContestNotices contest={contest} warning={warning} />
           <section className="rounded-3xl border border-white/10 bg-slate-900/50 p-6 shadow-2xl backdrop-blur-xl">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
