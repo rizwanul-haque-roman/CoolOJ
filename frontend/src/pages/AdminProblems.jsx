@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import api from "../api/axios";
+import "../components/ProfileDashboard.css";
 
 const BASE = "/admin/problems";
 
@@ -31,12 +32,6 @@ function blankCase() {
 function errorMessage(error) {
   return error.response?.data?.error || error.message || "Request failed.";
 }
-
-const inputClass =
-  "w-full rounded-lg border border-slate-700 bg-slate-950 p-3 text-slate-100";
-
-const buttonClass =
-  "rounded-lg border border-slate-700 px-4 py-2 text-sm hover:bg-slate-800 disabled:opacity-50";
 
 export default function AdminProblems() {
   const pageRef = useRef(null);
@@ -70,7 +65,6 @@ export default function AdminProblems() {
       element.style.setProperty(property, value);
     }
 
-    // One main scroll owner; ancestor clipping is scoped to this route.
     for (let ancestor = owner.parentElement; ancestor; ancestor = ancestor.parentElement) {
       ancestor.scrollTop = 0;
       setStyle(ancestor, "overflow-y", "hidden");
@@ -112,15 +106,15 @@ export default function AdminProblems() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
-function scrollToPageTop() {
-  requestAnimationFrame(() => {
-    pageTopRef.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-      inline: "nearest",
+  function scrollToPageTop() {
+    requestAnimationFrame(() => {
+      pageTopRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+        inline: "nearest",
+      });
     });
-  });
-}
+  }
 
   async function refreshProblems() {
     const { data } = await api.get(BASE);
@@ -157,7 +151,6 @@ function scrollToPageTop() {
 
   function updateField(event) {
     const { name, value, type, checked } = event.target;
-
     setForm((previous) => ({
       ...previous,
       [name]: type === "checkbox" ? checked : value,
@@ -193,7 +186,6 @@ function scrollToPageTop() {
     if (!window.confirm("Discard the current form and start a new problem?")) {
       return;
     }
-
     setEditingId(null);
     setForm(blankProblem());
     setError("");
@@ -204,7 +196,6 @@ function scrollToPageTop() {
     if (!window.confirm("Load this problem? Unsaved form changes will be lost.")) {
       return;
     }
-
     setBusy(true);
     setError("");
     setMessage("");
@@ -242,7 +233,6 @@ function scrollToPageTop() {
   async function importCases(event) {
     const file = event.target.files?.[0];
     event.target.value = "";
-
     if (!file) return;
 
     setError("");
@@ -252,7 +242,6 @@ function scrollToPageTop() {
       if (!file.name.toLowerCase().endsWith(".json")) {
         throw new Error("Choose a .json file.");
       }
-
       if (file.size > 2 * 1024 * 1024) {
         throw new Error("The JSON file must be at most 2 MB.");
       }
@@ -263,7 +252,6 @@ function scrollToPageTop() {
       if (!Array.isArray(cases) || cases.length === 0) {
         throw new Error("The file must contain a non-empty test-case array.");
       }
-
       if (cases.length + form.test_cases.length > 200) {
         throw new Error("A problem can contain at most 200 test cases.");
       }
@@ -278,7 +266,6 @@ function scrollToPageTop() {
         ) {
           throw new Error(`Invalid test case at position ${index + 1}.`);
         }
-
         return {
           input: tc.input,
           expected_output: tc.expected_output,
@@ -331,7 +318,6 @@ function scrollToPageTop() {
         ? await api.put(`${BASE}/${editingId}`, payload)
         : await api.post(BASE, payload);
 
-      // Keep the saved problem open. Future saves update this ID.
       setEditingId(response.data.id);
       setMessage(response.data.message);
 
@@ -345,8 +331,8 @@ function scrollToPageTop() {
     } catch (err) {
       setError(errorMessage(err));
     } finally {
-        setBusy(false);
-        scrollToPageTop();
+      setBusy(false);
+      scrollToPageTop();
     }
   }
 
@@ -354,207 +340,199 @@ function scrollToPageTop() {
   const hiddenCount = form.test_cases.length - sampleCount;
 
   return (
-    <div ref={pageRef} className="bg-slate-950 p-4 text-slate-100 md:p-8">
-      <div className="mx-auto max-w-6xl space-y-6">
-        <header ref={pageTopRef} className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-semibold">Problem Management</h1>
-            <p className="mt-2 text-slate-400">
-              Create problems, manage tests, and control publication.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={startNew}
-            disabled={busy}
-            className={buttonClass}
-          >
-            New problem
-          </button>
-        </header>
-
-        {error && (
-          <div
-            role="alert"
-            className="rounded-lg border border-red-800 bg-red-950/40 p-4 text-red-200"
-          >
-            {error}
-          </div>
-        )}
-
-        {message && (
-          <div
-            role="status"
-            className="rounded-lg border border-emerald-800 bg-emerald-950/40 p-4 text-emerald-200"
-          >
-            {message}
-          </div>
-        )}
-
-        <form
-          onSubmit={saveProblem}
-          className="rounded-xl border border-slate-800 bg-slate-900 p-5"
+    <div ref={pageRef} className="pd-stack">
+      <div className="pd-row" ref={pageTopRef}>
+        <div>
+          <h1 className="pd-title" style={{ fontSize: "1.5rem" }}>Problem Management</h1>
+          <p className="pd-note">
+            Create problems, manage tests, and control publication.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={startNew}
+          disabled={busy}
+          className="pd-button"
         >
-          <fieldset disabled={busy || loading} className="space-y-6">
-            <h2 className="text-xl font-semibold">
-              {editingId ? `Edit problem #${editingId}` : "Create a problem"}
-            </h2>
+          New problem
+        </button>
+      </div>
 
-            <label className="block space-y-2">
-              <span>Title</span>
-              <input
-                name="title"
-                value={form.title}
+      {error && (
+        <p role="alert" className="pd-error">
+          {error}
+        </p>
+      )}
+
+      {message && (
+        <p role="status" className="pd-note" style={{ color: "#34d399", padding: "12px", border: "1px solid #05966933", backgroundColor: "#064e3b1a", borderRadius: "6px" }}>
+          {message}
+        </p>
+      )}
+
+      <form onSubmit={saveProblem} className="pd-panel">
+        <fieldset disabled={busy || loading} style={{ border: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "16px" }}>
+          <h2 className="pd-title">
+            {editingId ? `Edit problem #${editingId}` : "Create a problem"}
+          </h2>
+
+          <label style={{ display: "block" }}>
+            <div className="pd-note" style={{ marginBottom: "6px" }}>Title</div>
+            <input
+              name="title"
+              value={form.title}
+              onChange={updateField}
+              maxLength={200}
+              required
+              className="pd-input"
+              style={{ width: "100%" }}
+            />
+          </label>
+
+          <div className="pd-row" style={{ alignItems: "flex-start", gap: "16px", flexWrap: "wrap" }}>
+            <label style={{ flex: "1 1 200px" }}>
+              <div className="pd-note" style={{ marginBottom: "6px" }}>Subject</div>
+              <select
+                name="subject_id"
+                value={form.subject_id}
                 onChange={updateField}
-                maxLength={200}
+                className="pd-input"
+                style={{ width: "100%" }}
+              >
+                <option value="">No subject</option>
+                {subjects.map((subject) => (
+                  <option key={subject.id} value={subject.id}>
+                    Semester {subject.semester_no} — {subject.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label style={{ flex: "1 1 200px" }}>
+              <div className="pd-note" style={{ marginBottom: "6px" }}>Difficulty</div>
+              <select
+                name="difficulty"
+                value={form.difficulty}
+                onChange={updateField}
+                className="pd-input"
+                style={{ width: "100%" }}
+              >
+                <option value="easy">Easy</option>
+                <option value="medium">Medium</option>
+                <option value="hard">Hard</option>
+              </select>
+            </label>
+
+            <label style={{ flex: "1 1 200px" }}>
+              <div className="pd-note" style={{ marginBottom: "6px" }}>Time limit (milliseconds)</div>
+              <input
+                type="number"
+                name="time_limit_ms"
+                value={form.time_limit_ms}
+                onChange={updateField}
+                min="1"
+                max="60000"
+                step="1"
                 required
-                className={inputClass}
+                className="pd-input"
+                style={{ width: "100%" }}
               />
             </label>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <label className="block space-y-2">
-                <span>Subject</span>
-                <select
-                  name="subject_id"
-                  value={form.subject_id}
-                  onChange={updateField}
-                  className={inputClass}
-                >
-                  <option value="">No subject</option>
-                  {subjects.map((subject) => (
-                    <option key={subject.id} value={subject.id}>
-                      Semester {subject.semester_no} — {subject.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+            <label style={{ flex: "1 1 200px" }}>
+              <div className="pd-note" style={{ marginBottom: "6px" }}>Memory limit (KB)</div>
+              <input
+                type="number"
+                name="memory_limit_kb"
+                value={form.memory_limit_kb}
+                onChange={updateField}
+                min="1"
+                max="1048576"
+                step="1"
+                required
+                className="pd-input"
+                style={{ width: "100%" }}
+              />
+            </label>
+          </div>
 
-              <label className="block space-y-2">
-                <span>Difficulty</span>
-                <select
-                  name="difficulty"
-                  value={form.difficulty}
-                  onChange={updateField}
-                  className={inputClass}
-                >
-                  <option value="easy">Easy</option>
-                  <option value="medium">Medium</option>
-                  <option value="hard">Hard</option>
-                </select>
-              </label>
+          {[
+            ["statement", "Problem statement", 8],
+            ["input_format", "Input format", 4],
+            ["output_format", "Output format", 4],
+            ["constraints", "Constraints", 4],
+          ].map(([name, label, rows]) => (
+            <label key={name} style={{ display: "block", marginTop: "8px" }}>
+              <div className="pd-note" style={{ marginBottom: "6px" }}>{label}</div>
+              <textarea
+                name={name}
+                value={form[name]}
+                onChange={updateField}
+                rows={rows}
+                required={name === "statement"}
+                className="pd-input"
+                style={{ width: "100%", fontFamily: "inherit" }}
+              />
+            </label>
+          ))}
 
-              <label className="block space-y-2">
-                <span>Time limit (milliseconds)</span>
-                <input
-                  type="number"
-                  name="time_limit_ms"
-                  value={form.time_limit_ms}
-                  onChange={updateField}
-                  min="1"
-                  max="60000"
-                  step="1"
-                  required
-                  className={inputClass}
-                />
-              </label>
-
-              <label className="block space-y-2">
-                <span>Memory limit (KB)</span>
-                <input
-                  type="number"
-                  name="memory_limit_kb"
-                  value={form.memory_limit_kb}
-                  onChange={updateField}
-                  min="1"
-                  max="1048576"
-                  step="1"
-                  required
-                  className={inputClass}
-                />
-              </label>
-            </div>
-
-            {[
-              ["statement", "Problem statement", 8],
-              ["input_format", "Input format", 4],
-              ["output_format", "Output format", 4],
-              ["constraints", "Constraints", 4],
-            ].map(([name, label, rows]) => (
-              <label key={name} className="block space-y-2">
-                <span>{label}</span>
-                <textarea
-                  name={name}
-                  value={form[name]}
-                  onChange={updateField}
-                  rows={rows}
-                  required={name === "statement"}
-                  className={inputClass}
-                />
-              </label>
-            ))}
-
-            <section className="space-y-4 border-t border-slate-800 pt-6">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-lg font-semibold">Test cases</h3>
-                  <p className="text-sm text-slate-400">
-                    {sampleCount} sample · {hiddenCount} hidden
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={addCase}
-                    disabled={form.test_cases.length >= 200}
-                    className={buttonClass}
-                  >
-                    Add test case
-                  </button>
-
-                  <label
-                    className={`${buttonClass} relative inline-flex cursor-pointer items-center justify-center overflow-hidden focus-within:ring-2 focus-within:ring-indigo-400`}
-                    >
-                    <span>Import JSON</span>
-
-                    <input
-                        type="file"
-                        accept=".json,application/json"
-                        onChange={importCases}
-                        aria-label="Import test cases from a JSON file"
-                        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                    />
-                  </label>
-                </div>
+          <div style={{ marginTop: "24px", paddingTop: "24px", borderTop: "1px solid #ffffff0a" }}>
+            <div className="pd-row">
+              <div>
+                <h3 className="pd-title">Test cases</h3>
+                <p className="pd-note" style={{ marginTop: "4px" }}>
+                  {sampleCount} sample · {hiddenCount} hidden
+                </p>
               </div>
 
-              <p className="text-sm text-slate-400">
-                Imported cases are appended. Sample cases are visible to users;
-                hidden cases must remain server-side.
-              </p>
-
-              {form.test_cases.map((tc, index) => (
-                <article
-                  key={index}
-                  className="space-y-4 rounded-lg border border-slate-700 p-4"
+              <div className="pd-row" style={{ gap: "12px" }}>
+                <button
+                  type="button"
+                  onClick={addCase}
+                  disabled={form.test_cases.length >= 200}
+                  className="pd-button"
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <h4>Test case {index + 1}</h4>
+                  Add test case
+                </button>
 
+                <label
+                  className="pd-button"
+                  style={{ position: "relative", overflow: "hidden", cursor: "pointer" }}
+                >
+                  <span>Import JSON</span>
+                  <input
+                    type="file"
+                    accept=".json,application/json"
+                    onChange={importCases}
+                    aria-label="Import test cases from a JSON file"
+                    style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer" }}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <p className="pd-note" style={{ marginTop: "8px", marginBottom: "16px" }}>
+              Imported cases are appended. Sample cases are visible to users;
+              hidden cases must remain server-side.
+            </p>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+              {form.test_cases.map((tc, index) => (
+                <div key={index} className="pd-panel" style={{ padding: "16px", backgroundColor: "#ffffff05", border: "1px solid #ffffff0a" }}>
+                  <div className="pd-row">
+                    <h4 style={{ margin: 0, fontSize: "14px", color: "#e2e8f0" }}>Test case {index + 1}</h4>
                     <button
                       type="button"
                       onClick={() => removeCase(index)}
-                      className="text-sm text-red-300 hover:text-red-200"
+                      style={{ background: "none", border: "none", color: "#f87171", cursor: "pointer", fontSize: "13px" }}
                     >
                       Remove
                     </button>
                   </div>
 
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <label className="block space-y-2">
-                      <span>Input</span>
+                  <div className="pd-row" style={{ alignItems: "flex-start", marginTop: "12px", gap: "16px" }}>
+                    <label style={{ flex: 1 }}>
+                      <div className="pd-note" style={{ marginBottom: "6px" }}>Input</div>
                       <textarea
                         value={tc.input}
                         onChange={(event) =>
@@ -562,12 +540,13 @@ function scrollToPageTop() {
                         }
                         rows={5}
                         spellCheck={false}
-                        className={`${inputClass} font-mono text-sm`}
+                        className="pd-input"
+                        style={{ width: "100%", fontFamily: "monospace", fontSize: "13px" }}
                       />
                     </label>
 
-                    <label className="block space-y-2">
-                      <span>Expected output</span>
+                    <label style={{ flex: 1 }}>
+                      <div className="pd-note" style={{ marginBottom: "6px" }}>Expected output</div>
                       <textarea
                         value={tc.expected_output}
                         onChange={(event) =>
@@ -579,12 +558,13 @@ function scrollToPageTop() {
                         }
                         rows={5}
                         spellCheck={false}
-                        className={`${inputClass} font-mono text-sm`}
+                        className="pd-input"
+                        style={{ width: "100%", fontFamily: "monospace", fontSize: "13px" }}
                       />
                     </label>
                   </div>
 
-                  <label className="flex items-center gap-2 text-sm">
+                  <label className="pd-row" style={{ justifyContent: "flex-start", gap: "8px", marginTop: "12px", cursor: "pointer" }}>
                     <input
                       type="checkbox"
                       checked={tc.is_sample}
@@ -592,104 +572,99 @@ function scrollToPageTop() {
                         updateCase(index, "is_sample", event.target.checked)
                       }
                     />
-                    Visible sample case
+                    <span className="pd-note">Visible sample case</span>
                   </label>
-                </article>
+                </div>
               ))}
-            </section>
-
-            <footer className="flex flex-wrap items-center justify-between gap-4 border-t border-slate-800 pt-6">
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  name="is_public"
-                  checked={form.is_public}
-                  onChange={updateField}
-                />
-                Published — visible in the public problem archive
-              </label>
-
-              <button
-                    type="submit"
-                    disabled={busy || loading}
-                    className="rounded-lg bg-indigo-600 px-5 py-3 font-medium hover:bg-indigo-500 disabled:opacity-50"
-                >
-                 {busy ? "Saving..." : "Save problem"}
-                </button>
-            </footer>
-          </fieldset>
-        </form>
-
-        <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-          <h2 className="mb-4 text-xl font-semibold">Existing problems</h2>
-
-          {loading ? (
-            <p className="text-slate-400">Loading problems...</p>
-          ) : problems.length === 0 ? (
-            <p className="text-slate-400">No problems found.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="border-b border-slate-700 text-slate-400">
-                  <tr>
-                    <th className="p-3">ID</th>
-                    <th className="p-3">Problem</th>
-                    <th className="p-3">Subject</th>
-                    <th className="p-3">Status</th>
-                    <th className="p-3">Tests</th>
-                    <th className="p-3">Actions</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {problems.map((problem) => (
-                    <tr
-                      key={problem.id}
-                      className="border-b border-slate-800"
-                    >
-                      <td className="p-3">{problem.id}</td>
-                      <td className="p-3">
-                        <div>{problem.title}</div>
-                        <div className="mt-1 text-xs text-slate-400">
-                          {problem.difficulty}
-                        </div>
-                      </td>
-                      <td className="p-3">
-                        {problem.subject_name || "—"}
-                      </td>
-                      <td className="p-3">
-                        {problem.is_public ? "Published" : "Draft"}
-                      </td>
-                      <td className="p-3">{problem.test_case_count}</td>
-                      <td className="p-3">
-                        <div className="flex items-center gap-4">
-                          <button
-                            type="button"
-                            onClick={() => editProblem(problem.id)}
-                            disabled={busy || loading}
-                            className="text-indigo-300 disabled:opacity-50"
-                          >
-                            Edit
-                          </button>
-
-                          {Boolean(problem.is_public) && (
-                            <Link
-                              to={`/problems/${problem.id}`}
-                              className="text-slate-300"
-                            >
-                              View
-                            </Link>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             </div>
-          )}
-        </section>
-      </div>
+          </div>
+
+          <div className="pd-row" style={{ marginTop: "24px", paddingTop: "24px", borderTop: "1px solid #ffffff0a" }}>
+            <label className="pd-row" style={{ justifyContent: "flex-start", gap: "8px", cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                name="is_public"
+                checked={form.is_public}
+                onChange={updateField}
+              />
+              <span className="pd-note">Published — visible in the public problem archive</span>
+            </label>
+
+            <button
+              type="submit"
+              disabled={busy || loading}
+              className="pd-button"
+              style={{ backgroundColor: "#3b82f6", color: "#fff", border: "none" }}
+            >
+              {busy ? "Saving..." : "Save problem"}
+            </button>
+          </div>
+        </fieldset>
+      </form>
+
+      <section className="pd-panel" style={{ marginTop: "24px" }}>
+        <h2 className="pd-title" style={{ marginBottom: "16px" }}>Existing problems</h2>
+
+        {loading ? (
+          <p className="pd-note">Loading problems...</p>
+        ) : problems.length === 0 ? (
+          <p className="pd-note">No problems found.</p>
+        ) : (
+          <div className="pd-table-wrap">
+            <table className="pd-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Problem</th>
+                  <th>Subject</th>
+                  <th>Status</th>
+                  <th>Tests</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {problems.map((problem) => (
+                  <tr key={problem.id}>
+                    <td>{problem.id}</td>
+                    <td>
+                      <div>{problem.title}</div>
+                      <div className="pd-note" style={{ marginTop: "4px" }}>
+                        {problem.difficulty}
+                      </div>
+                    </td>
+                    <td>
+                      {problem.subject_name || "—"}
+                    </td>
+                    <td>
+                      {problem.is_public ? "Published" : "Draft"}
+                    </td>
+                    <td>{problem.test_case_count}</td>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={() => editProblem(problem.id)}
+                        disabled={busy || loading}
+                        style={{ background: "none", border: "none", color: "#60a5fa", cursor: "pointer", marginRight: "12px" }}
+                      >
+                        Edit
+                      </button>
+
+                      {Boolean(problem.is_public) && (
+                        <Link
+                          to={`/problems/${problem.id}`}
+                          className="pd-link"
+                        >
+                          View
+                        </Link>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
