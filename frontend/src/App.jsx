@@ -17,6 +17,7 @@ import ContestDetails from "./pages/ContestDetails";
 import AdminContests from "./pages/AdminContests";
 import AdminContestControl from "./pages/AdminContestControl";
 import ContestLeaderboardPage from "./pages/ContestLeaderboardPage";
+import AdminProblems from "./pages/AdminProblems";
 
 function App() {
   const location = useLocation();
@@ -27,6 +28,7 @@ function App() {
     if (/^\/contests\/[1-9]\d*\/leaderboard\/?$/.test(path)) return "Contest Leaderboard";
     if (path.startsWith("/admin/contests/")) return "Contest Control Center";
     if (path.startsWith("/admin/contests")) return "Contest Control";
+    if (path.startsWith("/admin/problems")) return "Problem Management";
     if (path.startsWith("/admin/submissions")) return "Submissions Control";
     if (path.startsWith("/admin/users")) return "User Control";
     if (path.startsWith("/admin")) return "Admin Dashboard";
@@ -47,6 +49,7 @@ function App() {
     if (/^\/contests\/[1-9]\d*\/leaderboard\/?$/.test(path)) return "Follow solves, penalty time, and contest standings";
     if (path.startsWith("/admin/contests/")) return "Edit contest details, manage deadlines, and publish schedule changes";
     if (path.startsWith("/admin/contests")) return "Create contests, assign problems, and open contest controls";
+    if (path.startsWith("/admin/problems")) return "Create and manage problem statements and test cases";
     if (path.startsWith("/admin/submissions")) return "Monitor code runs, verdicts, and results";
     if (path.startsWith("/admin/users")) return "Manage student and administrator accounts";
     if (path.startsWith("/login")) return "Access your futuristic coding workspace";
@@ -92,6 +95,7 @@ function App() {
           <Route path="/contests/:id/leaderboard" element={<ContestLeaderboardPage />} />
           <Route path="/admin" element={<AdminDashboard />} />
           <Route path="/admin/dashboard" element={<AdminDashboard />} />
+          <Route path="/admin/problems" element={<AdminProblems />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/users/:id" element={<Profile />} />
           <Route path="/admin/contests" element={<AdminContests />} />

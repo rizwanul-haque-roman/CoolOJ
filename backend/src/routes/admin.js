@@ -41,108 +41,560 @@ async function countActiveAdmins() {
   return Number(rows[0]?.total || 0);
 }
 
-router.post("/problems", async (req, res) => {
-  const {
-    title,
-    statement,
-    input_format,
-    output_format,
-    constraints,
+// ============================================================
+// ADMIN PROBLEM MANAGEMENT
+//
+// Protected by the existing:
+// router.use(requireAuth, requireAdmin);
+// ============================================================
+
+const PROBLEM_DIFFICULTIES = ["easy", "medium", "hard"];
+
+const PROBLEM_MAX_CASES = 200;
+const PROBLEM_MAX_CASE_BYTES = 64 * 1024;
+const PROBLEM_MAX_TOTAL_CASE_BYTES = 1024 * 1024;
+
+function problemHttpError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function readProblemId(value) {
+  const id = Number(value);
+
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw problemHttpError(400, "Invalid problem ID.");
+  }
+
+  return id;
+}
+
+function validateProblemCases(cases) {
+  if (!Array.isArray(cases)) {
+    throw problemHttpError(400, "test_cases must be an array.");
+  }
+
+  if (cases.length > PROBLEM_MAX_CASES) {
+    throw problemHttpError(
+      400,
+      `A problem can contain at most ${PROBLEM_MAX_CASES} test cases.`,
+    );
+  }
+
+  let totalBytes = 0;
+
+  const normalized = cases.map((tc, index) => {
+    if (
+      !tc ||
+      typeof tc !== "object" ||
+      typeof tc.input !== "string" ||
+      typeof tc.expected_output !== "string"
+    ) {
+      throw problemHttpError(
+        400,
+        `Test case ${index + 1} must contain string input and expected_output.`,
+      );
+    }
+
+    if (
+      tc.is_sample !== undefined &&
+      typeof tc.is_sample !== "boolean"
+    ) {
+      throw problemHttpError(
+        400,
+        `Test case ${index + 1}: is_sample must be a boolean.`,
+      );
+    }
+
+    const inputBytes = Buffer.byteLength(tc.input, "utf8");
+    const outputBytes = Buffer.byteLength(tc.expected_output, "utf8");
+
+    if (
+      inputBytes > PROBLEM_MAX_CASE_BYTES ||
+      outputBytes > PROBLEM_MAX_CASE_BYTES
+    ) {
+      throw problemHttpError(
+        400,
+        `Test case ${index + 1}: input and expected output must each be at most 64 KB.`,
+      );
+    }
+
+    totalBytes += inputBytes + outputBytes;
+
+    return {
+      // Preserve whitespace exactly.
+      input: tc.input,
+      expected_output: tc.expected_output,
+      is_sample: tc.is_sample ?? false,
+    };
+  });
+
+  if (totalBytes > PROBLEM_MAX_TOTAL_CASE_BYTES) {
+    throw problemHttpError(
+      400,
+      "Combined test-case content must not exceed 1 MB.",
+    );
+  }
+
+  return normalized;
+}
+
+function validateProblemBody(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw problemHttpError(400, "A JSON object is required.");
+  }
+
+  if (
+    typeof body.title !== "string" ||
+    !body.title.trim() ||
+    body.title.trim().length > 200
+  ) {
+    throw problemHttpError(
+      400,
+      "Title is required and must be at most 200 characters.",
+    );
+  }
+
+  if (
+    typeof body.statement !== "string" ||
+    !body.statement.trim()
+  ) {
+    throw problemHttpError(400, "Problem statement is required.");
+  }
+
+  const optionalText = {};
+
+  for (const field of [
+    "input_format",
+    "output_format",
+    "constraints",
+  ]) {
+    const value = body[field] ?? "";
+
+    if (typeof value !== "string") {
+      throw problemHttpError(400, `${field} must be a string.`);
+    }
+
+    optionalText[field] = value;
+  }
+
+  const difficulty =
+  typeof body.difficulty === "string"
+    ? body.difficulty.trim().toLowerCase()
+    : "";
+
+  if (!PROBLEM_DIFFICULTIES.includes(difficulty)) {
+    throw problemHttpError(
+      400,
+      "Difficulty must be easy, medium, or hard.",
+    );
+  }
+
+  if (
+    !Number.isSafeInteger(body.time_limit_ms) ||
+    body.time_limit_ms < 1 ||
+    body.time_limit_ms > 60000
+  ) {
+    throw problemHttpError(
+      400,
+      "Time limit must be an integer from 1 to 60000 ms.",
+    );
+  }
+
+  if (
+    !Number.isSafeInteger(body.memory_limit_kb) ||
+    body.memory_limit_kb < 1 ||
+    body.memory_limit_kb > 1048576
+  ) {
+    throw problemHttpError(
+      400,
+      "Memory limit must be an integer from 1 to 1048576 KB.",
+    );
+  }
+
+  const subjectId = body.subject_id ?? null;
+
+  if (
+    subjectId !== null &&
+    (!Number.isSafeInteger(subjectId) || subjectId <= 0)
+  ) {
+    throw problemHttpError(
+      400,
+      "subject_id must be a positive integer or null.",
+    );
+  }
+
+  const isPublic = body.is_public ?? false;
+
+  if (typeof isPublic !== "boolean") {
+    throw problemHttpError(400, "is_public must be a boolean.");
+  }
+
+  // POST can omit cases when creating an empty draft.
+  const testCases = validateProblemCases(body.test_cases ?? []);
+
+  if (isPublic) {
+    const hasSample = testCases.some((tc) => tc.is_sample);
+    const hasHidden = testCases.some((tc) => !tc.is_sample);
+
+    if (!hasSample || !hasHidden) {
+      throw problemHttpError(
+        400,
+        "Publishing requires at least one sample and one hidden test case.",
+      );
+    }
+  }
+
+  return {
+    title: body.title.trim(),
+    statement: body.statement,
+    ...optionalText,
     difficulty,
-    time_limit_ms,
-    memory_limit_kb,
-    subject_id,
-  } = req.body;
+    time_limit_ms: body.time_limit_ms,
+    memory_limit_kb: body.memory_limit_kb,
+    subject_id: subjectId,
+    is_public: isPublic,
+    test_cases: testCases,
+  };
+}
+
+async function insertProblemCases(connection, problemId, cases) {
+  for (const tc of cases) {
+    await connection.execute(
+      `INSERT INTO test_cases
+        (problem_id, input, expected_output, is_sample)
+       VALUES (?, ?, ?, ?)`,
+      [
+        problemId,
+        tc.input,
+        tc.expected_output,
+        tc.is_sample,
+      ],
+    );
+  }
+}
+
+function sendProblemError(res, error, label) {
+  const expected =
+    Number.isInteger(error.statusCode) &&
+    error.statusCode >= 400 &&
+    error.statusCode < 500;
+
+  if (!expected) {
+    console.error(label, error);
+  }
+
+  return res.status(expected ? error.statusCode : 500).json({
+    error: expected
+      ? error.message
+      : "Unable to complete the problem-management request.",
+  });
+}
+
+// ------------------------------------------------------------
+// GET /api/admin/problems
+// Includes drafts. Retains the fields used by the existing list.
+// ------------------------------------------------------------
+
+router.get("/problems", async (req, res) => {
+  try {
+    const [rows] = await db.execute(`
+      SELECT
+        p.id,
+        p.title,
+        p.difficulty,
+        p.is_public,
+        p.subject_id,
+        p.time_limit_ms,
+        p.memory_limit_kb,
+        s.name AS subject_name,
+        (
+          SELECT COUNT(*)
+          FROM test_cases tc
+          WHERE tc.problem_id = p.id
+        ) AS test_case_count,
+        (
+          SELECT COUNT(*)
+          FROM test_cases tc
+          WHERE tc.problem_id = p.id
+            AND tc.is_sample = false
+        ) AS hidden_test_count
+      FROM problems p
+      LEFT JOIN subjects s ON s.id = p.subject_id
+      ORDER BY p.id DESC
+    `);
+
+    res.json(
+      rows.map((row) => ({
+        ...row,
+        is_public: Boolean(row.is_public),
+      })),
+    );
+  } catch (error) {
+    sendProblemError(res, error, "Admin problem list error:");
+  }
+});
+
+// ------------------------------------------------------------
+// GET /api/admin/problems/:id
+// Admin-only: includes hidden cases.
+// ------------------------------------------------------------
+
+router.get("/problems/:id", async (req, res) => {
+  try {
+    const id = readProblemId(req.params.id);
+
+    const [rows] = await db.execute(
+      "SELECT * FROM problems WHERE id = ?",
+      [id],
+    );
+
+    if (!rows.length) {
+      throw problemHttpError(404, "Problem not found.");
+    }
+
+    const [cases] = await db.execute(
+      `SELECT id, input, expected_output, is_sample
+       FROM test_cases
+       WHERE problem_id = ?
+       ORDER BY id ASC`,
+      [id],
+    );
+
+    res.json({
+      ...rows[0],
+      is_public: Boolean(rows[0].is_public),
+      test_cases: cases.map((tc) => ({
+        ...tc,
+        is_sample: Boolean(tc.is_sample),
+      })),
+    });
+  } catch (error) {
+    sendProblemError(res, error, "Admin problem details error:");
+  }
+});
+
+// ------------------------------------------------------------
+// POST /api/admin/problems
+// PUT  /api/admin/problems/:id
+//
+// Saves metadata and the complete case list in one transaction.
+// PUT is a full form save, not a partial update.
+// ------------------------------------------------------------
+
+async function saveAdminProblem(req, res) {
+  let connection;
 
   try {
-    const [result] = await db.execute(
-      `INSERT INTO problems
-        (
+    const editing = req.method === "PUT";
+    const requestedId = editing
+      ? readProblemId(req.params.id)
+      : null;
+
+    // Require explicit cases on edits to avoid accidental deletion
+    // caused by a client forgetting to include the case list.
+    if (
+      editing &&
+      !Object.prototype.hasOwnProperty.call(
+        req.body ?? {},
+        "test_cases",
+      )
+    ) {
+      throw problemHttpError(
+        400,
+        "Editing requires the complete test_cases array.",
+      );
+    }
+
+    const problem = validateProblemBody(req.body);
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    if (editing) {
+      const [existing] = await connection.execute(
+        "SELECT id FROM problems WHERE id = ? FOR UPDATE",
+        [requestedId],
+      );
+
+      if (!existing.length) {
+        throw problemHttpError(404, "Problem not found.");
+      }
+    }
+
+    if (problem.subject_id !== null) {
+      const [subjects] = await connection.execute(
+        "SELECT id FROM subjects WHERE id = ?",
+        [problem.subject_id],
+      );
+
+      if (!subjects.length) {
+        throw problemHttpError(
+          400,
+          "The selected subject does not exist.",
+        );
+      }
+    }
+
+    const values = [
+      problem.title,
+      problem.statement,
+      problem.input_format,
+      problem.output_format,
+      problem.constraints,
+      problem.difficulty,
+      problem.time_limit_ms,
+      problem.memory_limit_kb,
+      problem.subject_id,
+      problem.is_public,
+    ];
+
+    let savedId = requestedId;
+
+    if (editing) {
+      await connection.execute(
+        `UPDATE problems SET
+          title = ?,
+          statement = ?,
+          input_format = ?,
+          output_format = ?,
+          \`constraints\` = ?,
+          difficulty = ?,
+          time_limit_ms = ?,
+          memory_limit_kb = ?,
+          subject_id = ?,
+          is_public = ?
+         WHERE id = ?`,
+        [...values, savedId],
+      );
+
+      await connection.execute(
+        "DELETE FROM test_cases WHERE problem_id = ?",
+        [savedId],
+      );
+    } else {
+      const [result] = await connection.execute(
+        `INSERT INTO problems (
           title,
           statement,
           input_format,
           output_format,
-          constraints,
+          \`constraints\`,
           difficulty,
           time_limit_ms,
           memory_limit_kb,
-          subject_id
-        )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        title,
-        statement,
-        input_format,
-        output_format,
-        constraints,
-        difficulty,
-        time_limit_ms,
-        memory_limit_kb,
-        subject_id,
-      ],
-    );
+          subject_id,
+          is_public
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        values,
+      );
 
-    const [rows] = await db.execute(
-      "SELECT * FROM problems WHERE id = ?",
-      [result.insertId],
-    );
-
-    res.status(201).json(rows[0]);
-  } catch (err) {
-    console.error("Create problem error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.post("/problems/:id/testcases", async (req, res) => {
-  const { test_cases } = req.body;
-
-  if (!Array.isArray(test_cases) || test_cases.length === 0) {
-    return res.status(400).json({
-      error: "test_cases must be a non-empty array.",
-    });
-  }
-
-  try {
-    const [problemRows] = await db.execute(
-      "SELECT id FROM problems WHERE id = ?",
-      [req.params.id],
-    );
-
-    if (problemRows.length === 0) {
-      return res.status(404).json({ error: "Problem not found." });
+      savedId = result.insertId;
     }
 
-    for (const tc of test_cases) {
-      if (
-        typeof tc.input !== "string" ||
-        typeof tc.expected_output !== "string"
-      ) {
-        return res.status(400).json({
-          error:
-            "Each test case must include string values for input and expected_output.",
-        });
-      }
+    await insertProblemCases(
+      connection,
+      savedId,
+      problem.test_cases,
+    );
 
-      await db.execute(
-        `INSERT INTO test_cases
-          (problem_id, input, expected_output, is_sample)
-         VALUES (?, ?, ?, ?)`,
-        [req.params.id, tc.input, tc.expected_output, tc.is_sample || false],
+    await connection.commit();
+
+    res.status(editing ? 200 : 201).json({
+      id: savedId,
+      is_public: problem.is_public,
+      test_case_count: problem.test_cases.length,
+      message: problem.is_public
+        ? "Problem saved and published."
+        : "Problem saved as a draft.",
+    });
+  } catch (error) {
+    if (connection) {
+      await connection.rollback().catch(() => {});
+    }
+
+    sendProblemError(res, error, "Save admin problem error:");
+  } finally {
+    connection?.release();
+  }
+}
+
+router.post("/problems", saveAdminProblem);
+router.put("/problems/:id", saveAdminProblem);
+
+// ------------------------------------------------------------
+// POST /api/admin/problems/:id/testcases
+//
+// Appends additional cases.
+// Does not change the problem's publication status.
+// ------------------------------------------------------------
+
+router.post("/problems/:id/testcases", async (req, res) => {
+  let connection;
+
+  try {
+    const id = readProblemId(req.params.id);
+    const cases = validateProblemCases(req.body?.test_cases);
+
+    if (!cases.length) {
+      throw problemHttpError(
+        400,
+        "test_cases must be a non-empty array.",
       );
     }
 
-    await db.execute(
-      "UPDATE problems SET is_public = true WHERE id = ?",
-      [req.params.id],
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [problems] = await connection.execute(
+      "SELECT id FROM problems WHERE id = ? FOR UPDATE",
+      [id],
     );
 
-    res.json({ message: "Test cases added and problem published." });
-  } catch (err) {
-    console.error("Add test cases error:", err);
-    res.status(500).json({ error: err.message });
+    if (!problems.length) {
+      throw problemHttpError(404, "Problem not found.");
+    }
+
+    const [existing] = await connection.execute(
+      `SELECT input, expected_output, is_sample
+       FROM test_cases
+       WHERE problem_id = ?`,
+      [id],
+    );
+
+    // Enforce limits against the complete resulting case set,
+    // not only against this upload.
+    validateProblemCases([
+      ...existing.map((tc) => ({
+        ...tc,
+        is_sample: Boolean(tc.is_sample),
+      })),
+      ...cases,
+    ]);
+
+    await insertProblemCases(connection, id, cases);
+
+    await connection.commit();
+
+    res.status(201).json({
+      id,
+      added_count: cases.length,
+      test_case_count: existing.length + cases.length,
+      message: "Test cases added. Publication status is unchanged.",
+    });
+  } catch (error) {
+    if (connection) {
+      await connection.rollback().catch(() => {});
+    }
+
+    sendProblemError(res, error, "Add problem test cases error:");
+  } finally {
+    connection?.release();
   }
 });
+
+
 
 router.post("/contests", async (req, res) => {
   const { title, description, start_time, end_time, problem_ids = [] } =
@@ -628,41 +1080,6 @@ router.get("/audit-logs", async (req, res) => {
   }
 });
 
-router.get("/problems", async (req, res) => {
-  try {
-    const [rows] = await db.execute(`
-      SELECT
-        p.id,
-        p.title,
-        p.difficulty,
-        p.is_public,
-        p.time_limit_ms,
-        p.memory_limit_kb,
-        COUNT(tc.id) AS test_case_count,
-        SUM(
-          CASE WHEN tc.is_sample = false THEN 1 ELSE 0 END
-        ) AS hidden_test_count
-      FROM problems AS p
-      LEFT JOIN test_cases AS tc
-        ON tc.problem_id = p.id
-      GROUP BY
-        p.id,
-        p.title,
-        p.difficulty,
-        p.is_public,
-        p.time_limit_ms,
-        p.memory_limit_kb
-      ORDER BY p.id DESC
-    `);
 
-    res.json(rows);
-  } catch (err) {
-    console.error("Admin problem list error:", err);
-
-    res.status(500).json({
-      error: "Unable to load the problem bank.",
-    });
-  }
-});
 
 module.exports = router;
