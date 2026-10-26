@@ -4,6 +4,7 @@ import dpc from "../assets/dpc.png";
 import {
   Code2,
   FileCode2,
+  FilePenLine,
   GraduationCap,
   LogIn,
   UserPlus,
@@ -81,6 +82,11 @@ function Navbar() {
   ];
 
   const adminItems = [
+    {
+      to: "/admin/problems",
+      label: "Manage Problems",
+      icon: FilePenLine,
+    },
     {
       to: "/admin/contests",
       label: "Contest Control",
