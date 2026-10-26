@@ -514,13 +514,17 @@ function scrollToPageTop() {
                     Add test case
                   </button>
 
-                  <label className={`${buttonClass} cursor-pointer`}>
-                    Import JSON
+                  <label
+                    className={`${buttonClass} relative inline-flex cursor-pointer items-center justify-center overflow-hidden focus-within:ring-2 focus-within:ring-indigo-400`}
+                    >
+                    <span>Import JSON</span>
+
                     <input
-                      type="file"
-                      accept=".json,application/json"
-                      onChange={importCases}
-                      className="sr-only"
+                        type="file"
+                        accept=".json,application/json"
+                        onChange={importCases}
+                        aria-label="Import test cases from a JSON file"
+                        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
                     />
                   </label>
                 </div>
