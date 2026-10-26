@@ -41,13 +41,6 @@ async function countActiveAdmins() {
   return Number(rows[0]?.total || 0);
 }
 
-// ============================================================
-// ADMIN PROBLEM MANAGEMENT
-//
-// Protected by the existing:
-// router.use(requireAuth, requireAdmin);
-// ============================================================
-
 const PROBLEM_DIFFICULTIES = ["easy", "medium", "hard"];
 
 const PROBLEM_MAX_CASES = 200;
@@ -292,11 +285,6 @@ function sendProblemError(res, error, label) {
   });
 }
 
-// ------------------------------------------------------------
-// GET /api/admin/problems
-// Includes drafts. Retains the fields used by the existing list.
-// ------------------------------------------------------------
-
 router.get("/problems", async (req, res) => {
   try {
     const [rows] = await db.execute(`
@@ -336,11 +324,6 @@ router.get("/problems", async (req, res) => {
   }
 });
 
-// ------------------------------------------------------------
-// GET /api/admin/problems/:id
-// Admin-only: includes hidden cases.
-// ------------------------------------------------------------
-
 router.get("/problems/:id", async (req, res) => {
   try {
     const id = readProblemId(req.params.id);
@@ -374,14 +357,6 @@ router.get("/problems/:id", async (req, res) => {
     sendProblemError(res, error, "Admin problem details error:");
   }
 });
-
-// ------------------------------------------------------------
-// POST /api/admin/problems
-// PUT  /api/admin/problems/:id
-//
-// Saves metadata and the complete case list in one transaction.
-// PUT is a full form save, not a partial update.
-// ------------------------------------------------------------
 
 async function saveAdminProblem(req, res) {
   let connection;
@@ -523,13 +498,6 @@ async function saveAdminProblem(req, res) {
 router.post("/problems", saveAdminProblem);
 router.put("/problems/:id", saveAdminProblem);
 
-// ------------------------------------------------------------
-// POST /api/admin/problems/:id/testcases
-//
-// Appends additional cases.
-// Does not change the problem's publication status.
-// ------------------------------------------------------------
-
 router.post("/problems/:id/testcases", async (req, res) => {
   let connection;
 
@@ -563,8 +531,6 @@ router.post("/problems/:id/testcases", async (req, res) => {
       [id],
     );
 
-    // Enforce limits against the complete resulting case set,
-    // not only against this upload.
     validateProblemCases([
       ...existing.map((tc) => ({
         ...tc,
