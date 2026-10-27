@@ -560,7 +560,148 @@ router.post("/problems/:id/testcases", async (req, res) => {
   }
 });
 
+router.delete("/problems/:id", async (req, res) => {
+  const problemId = Number(req.params.id);
 
+  if (!Number.isSafeInteger(problemId) || problemId <= 0) {
+    return res.status(400).json({
+      error: "Invalid problem ID.",
+    });
+  }
+
+  let connection;
+
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    // Lock the parent first.
+    const [problemRows] = await connection.execute(
+      `SELECT id, title
+       FROM problems
+       WHERE id = ?
+       FOR UPDATE`,
+      [problemId],
+    );
+
+    if (problemRows.length === 0) {
+      await connection.rollback();
+
+      return res.status(404).json({
+        error: "Problem not found.",
+      });
+    }
+
+    const [submissionRows] = await connection.execute(
+      `SELECT id
+       FROM submissions
+       WHERE problem_id = ?
+       LIMIT 1
+       FOR UPDATE`,
+      [problemId],
+    );
+
+    const [contestRows] = await connection.execute(
+      `SELECT problem_id
+       FROM contest_problems
+       WHERE problem_id = ?
+       LIMIT 1
+       FOR UPDATE`,
+      [problemId],
+    );
+
+    const hasSubmissions = submissionRows.length > 0;
+    const hasContestHistory = contestRows.length > 0;
+
+    if (hasSubmissions || hasContestHistory) {
+      await connection.rollback();
+
+      const reasons = [];
+
+      if (hasSubmissions) {
+        reasons.push("it has submissions");
+      }
+
+      if (hasContestHistory) {
+        reasons.push("it has contest history");
+      }
+
+      return res.status(409).json({
+        error: `Cannot delete this problem because ${reasons.join(" and ")}.`,
+        has_submissions: hasSubmissions,
+        has_contest_history: hasContestHistory,
+      });
+    }
+
+    const problem = problemRows[0];
+
+    await connection.execute(
+      "DELETE FROM test_cases WHERE problem_id = ?",
+      [problemId],
+    );
+
+    await connection.execute(
+      "DELETE FROM problems WHERE id = ?",
+      [problemId],
+    );
+
+    await connection.execute(
+      `INSERT INTO admin_audit_logs
+        (admin_id, action, target_type, target_id, details)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        req.user.userId,
+        "problem_deleted",
+        "problem",
+        problemId,
+        JSON.stringify({
+          title: problem.title,
+          submission_count: 0,
+          contest_history_count: 0,
+        }),
+      ],
+    );
+
+    await connection.commit();
+
+    return res.json({
+      id: problemId,
+      message: `Problem "${problem.title}" deleted successfully.`,
+    });
+  } catch (error) {
+    if (connection) {
+      await connection.rollback().catch(() => {});
+    }
+
+    if (
+      error.code === "ER_ROW_IS_REFERENCED_2" ||
+      error.errno === 1451
+    ) {
+      return res.status(409).json({
+        error:
+          "This problem has related records and cannot be deleted. Refresh the page and try again.",
+      });
+    }
+
+    if (
+      error.code === "ER_LOCK_DEADLOCK" ||
+      error.code === "ER_LOCK_WAIT_TIMEOUT"
+    ) {
+      return res.status(409).json({
+        error:
+          "The problem is currently being modified. Please try again.",
+      });
+    }
+
+    console.error("Delete problem error:", error);
+
+    return res.status(500).json({
+      error: "Unable to delete the problem.",
+    });
+  } finally {
+    connection?.release();
+  }
+});
 
 router.post("/contests", async (req, res) => {
   const { title, description, start_time, end_time, problem_ids = [] } =

@@ -6,6 +6,7 @@ import {
 } from "react";
 import {
   Link,
+  useNavigate,
   useParams,
   useSearchParams,
 } from "react-router-dom";
@@ -72,6 +73,14 @@ function parsePositiveId(value) {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
+function readUser() {
+  try {
+    return JSON.parse(localStorage.getItem("user") || "null");
+  } catch {
+    return null;
+  }
+}
+
 function getDifficultyClass(difficulty) {
   const value = String(difficulty || "").toLowerCase();
 
@@ -128,6 +137,8 @@ function SampleBox({ label, value, onCopy }) {
 function ProblemDetails() {
   const { id } = useParams();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const [user] = useState(readUser);
 
   const problemId = parsePositiveId(id);
   const rawContestId = searchParams.get("contest_id");
@@ -158,6 +169,8 @@ function ProblemDetails() {
 
   const [running, setRunning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   const [submissions, setSubmissions] = useState([]);
   const [loadingSubmissions, setLoadingSubmissions] =
@@ -171,6 +184,7 @@ function ProblemDetails() {
   const historyRequestRef = useRef(0);
 
   const busy = running || submitting;
+  const isAdmin = user?.role === "admin";
 
   useEffect(() => {
     const controller = new AbortController();
@@ -178,6 +192,7 @@ function ProblemDetails() {
     async function fetchProblem() {
       setLoading(true);
       setError("");
+      setDeleteError("");
       setErrorStatus(null);
       setProblem(null);
       setLoadedContextKey("");
@@ -501,6 +516,43 @@ function ProblemDetails() {
     }
   };
 
+  const handleDeleteProblem = async () => {
+    if (!isAdmin || deleting) return;
+
+    const requestContext = contextKey;
+
+    const confirmed = window.confirm(
+      `Permanently delete problem #${problem.id}: "${problem.title}"?\n\n` +
+        "Its test cases will also be deleted. Deletion is allowed only if " +
+        "the problem has no submissions and has never been used in a contest.\n\n" +
+        "This action cannot be undone.",
+    );
+
+    if (!confirmed) return;
+
+    setDeleting(true);
+    setDeleteError("");
+
+    try {
+      await api.delete(`/admin/problems/${problem.id}`);
+      console.log(`Problem #${problem.id} deleted successfully.`);
+      if (contextRef.current === requestContext) {
+        navigate("/problems", { replace: true });
+      }
+    } catch (err) {
+        if (contextRef.current === requestContext) {
+          setDeleteError(
+            err.response?.data?.error ||
+              err.message ||
+              "Unable to delete this problem.",
+          );
+        }
+      } 
+      finally {
+      setDeleting(false);
+    }
+  };
+
   const copyToClipboard = async (value) => {
     try {
       await navigator.clipboard.writeText(String(value ?? ""));
@@ -686,10 +738,38 @@ function ProblemDetails() {
             </div>
           </div>
 
-          <span className="hidden text-xs text-slate-500 md:block">
-            {isContestMode ? "Contest workspace" : "Problem workspace"}
-          </span>
+          <div className="flex shrink-0 items-center gap-2">
+            {isAdmin && (
+              <>
+                <Link
+                  to={`/admin/problems?edit=${problem.id}`}
+                  className="rounded-lg border border-cyan-400/20 bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-400/20"
+                >
+                  Edit problem
+                </Link>
+                <button
+                  type="button"
+                  onClick={handleDeleteProblem}
+                  disabled={deleting}
+                  className="rounded-lg border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs font-semibold text-rose-200 transition hover:bg-rose-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {deleting ? "Deleting..." : "Delete problem"}
+                </button>
+              </>
+            )}
+            <span className="hidden text-xs text-slate-500 md:block">
+              {isContestMode ? "Contest workspace" : "Problem workspace"}
+            </span>
+          </div>
         </div>
+        {deleteError && (
+          <p
+            role="alert"
+            className="mt-3 rounded-lg border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs text-rose-200"
+          >
+            {deleteError}
+          </p>
+        )}
       </div>
 
       {isContestMode && (
