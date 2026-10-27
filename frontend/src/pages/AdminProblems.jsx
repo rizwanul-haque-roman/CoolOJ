@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import api from "../api/axios";
 import "../components/ProfileDashboard.css";
 
@@ -34,6 +34,7 @@ function errorMessage(error) {
 }
 
 export default function AdminProblems() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const pageRef = useRef(null);
   const pageTopRef = useRef(null);
   const scrollOwnerRef = useRef(null);
@@ -105,6 +106,7 @@ export default function AdminProblems() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [deletingId, setDeletingId] = useState(null);
 
   function scrollToPageTop() {
     requestAnimationFrame(() => {
@@ -192,8 +194,53 @@ export default function AdminProblems() {
     setMessage("");
   }
 
-  async function editProblem(id) {
-    if (!window.confirm("Load this problem? Unsaved form changes will be lost.")) {
+  async function deleteProblem(problem) {
+    if (busy || deletingId !== null) return;
+
+    const confirmed = window.confirm(
+      `Permanently delete problem #${problem.id}: "${problem.title}"?\n\n` +
+        "Its test cases will also be deleted.\n\n" +
+        "Deletion is allowed only if the problem has no submissions " +
+        "and has never been used in a contest.\n\n" +
+        "This action cannot be undone.",
+    );
+
+    if (!confirmed) return;
+
+    setDeletingId(problem.id);
+    setBusy(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const { data } = await api.delete(`${BASE}/${problem.id}`);
+
+      // Remove it immediately after the backend confirms deletion.
+      setProblems((previous) =>
+        previous.filter((item) => item.id !== problem.id),
+      );
+
+      // Clear the editor if it contains the deleted problem.
+      if (Number(editingId) === Number(problem.id)) {
+        setEditingId(null);
+        setForm(blankProblem());
+      }
+
+      setMessage(data.message);
+      } catch (err) {
+        setError(errorMessage(err));
+      } finally {
+        setDeletingId(null);
+        setBusy(false);
+        scrollToPageTop();
+      }
+  }
+
+  const editProblem = useCallback(async (id, confirmLoad = true) => {
+    if (
+      confirmLoad &&
+      !window.confirm("Load this problem? Unsaved form changes will be lost.")
+    ) {
       return;
     }
     setBusy(true);
@@ -210,7 +257,7 @@ export default function AdminProblems() {
         input_format: data.input_format ?? "",
         output_format: data.output_format ?? "",
         constraints: data.constraints ?? "",
-        difficulty: data.difficulty,
+        difficulty: String(data.difficulty ?? "").trim().toLowerCase(),
         time_limit_ms: data.time_limit_ms,
         memory_limit_kb: data.memory_limit_kb,
         subject_id: data.subject_id ?? "",
@@ -228,7 +275,30 @@ export default function AdminProblems() {
     } finally {
       setBusy(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    const requestedId = searchParams.get("edit");
+    if (requestedId === null || loading) return;
+
+    const problemId = /^[1-9]\d*$/.test(requestedId)
+      ? Number(requestedId)
+      : null;
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("edit");
+
+    setSearchParams(nextParams, { replace: true });
+
+    if (Number.isSafeInteger(problemId)) {
+      async function loadRequestedProblem() {
+        await Promise.resolve();
+        await editProblem(problemId, false);
+      }
+
+      void loadRequestedProblem();
+    }
+  }, [editProblem, loading, searchParams, setSearchParams]);
 
   async function importCases(event) {
     const file = event.target.files?.[0];
@@ -657,6 +727,15 @@ export default function AdminProblems() {
                           View
                         </Link>
                       )}
+                      
+                      <button
+                        type="button"
+                        onClick={() => deleteProblem(problem)}
+                        disabled={busy || loading || deletingId !== null}
+                        style={{ background: "none", border: "none", color: "#f87171", cursor: "pointer", marginLeft: "12px", }}
+                      >
+                        {deletingId === problem.id ? "Deleting..." : "Delete"}
+                      </button>
                     </td>
                   </tr>
                 ))}
