@@ -18,6 +18,7 @@ import AdminContests from "./pages/AdminContests";
 import AdminContestControl from "./pages/AdminContestControl";
 import ContestLeaderboardPage from "./pages/ContestLeaderboardPage";
 import AdminProblems from "./pages/AdminProblems";
+import AdminAuditLogs from "./pages/AdminAuditLogs";
 
 function App() {
   const location = useLocation();
@@ -31,6 +32,7 @@ function App() {
     if (path.startsWith("/admin/problems")) return "Problem Management";
     if (path.startsWith("/admin/submissions")) return "Submissions Control";
     if (path.startsWith("/admin/users")) return "User Control";
+    if (path.startsWith("/admin/audit-logs")) return "Audit Logs";
     if (path.startsWith("/admin")) return "Admin Dashboard";
     if (path.startsWith("/login")) return "Login";
     if (path.startsWith("/register")) return "Register";
@@ -52,6 +54,7 @@ function App() {
     if (path.startsWith("/admin/problems")) return "Create and manage problem statements and test cases";
     if (path.startsWith("/admin/submissions")) return "Monitor code runs, verdicts, and results";
     if (path.startsWith("/admin/users")) return "Manage student and administrator accounts";
+    if (path.startsWith("/admin/audit-logs")) return "View audit logs and track system activities";
     if (path.startsWith("/login")) return "Access your futuristic coding workspace";
     if (path.startsWith("/register")) return "Create your account and start solving";
     if (path.startsWith("/submissions")) return "Track code runs, verdicts, and results";
@@ -104,6 +107,7 @@ function App() {
           <Route path="/submissions/:submissionId" element={<SubmissionDetails />}/>
           <Route path="/submissions" element={<Submissions />} />
           <Route path="/admin/submissions" element={<AdminSubmissions />} />
+          <Route path="/admin/audit-logs" element={<AdminAuditLogs />} />
           <Route path="/admin/users" element={<AdminUsers />} />
           <Route path="/learn" element={<Learn />} />
           <Route path="/learn/topic/:topicId" element={<LearnTopic />} />

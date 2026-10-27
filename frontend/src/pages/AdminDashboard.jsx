@@ -343,38 +343,6 @@ export default function AdminDashboard() {
           </table>
         </div>
       </section>
-      <section className="pd-panel">
-        <h2 className="pd-title">Recent administrative activity</h2>
-        <div className="pd-table-wrap">
-          <table className="pd-table">
-            <thead>
-              <tr>
-                {["Administrator", "Action", "Target", "Time"].map((x) => (
-                  <th key={x}>{x}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {data.audit.length ? (
-                data.audit.map((a) => (
-                  <tr key={a.id}>
-                    <td>{a.admin_name}</td>
-                    <td>{a.action.replaceAll("_", " ")}</td>
-                    <td>
-                      {a.target_type} #{a.target_id}
-                    </td>
-                    <td>{new Date(a.created_at).toLocaleString()}</td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={4}>No audit events yet.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
     </div>
   );
 }

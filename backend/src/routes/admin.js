@@ -3,33 +3,16 @@ const router = express.Router();
 const db = require("../db");
 const { changeContestProblem } = require("../utils/liveContestProblems");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
+const { writeAuditLog, diffChanges } = require("../utils/auditLog");
+
 
 router.use(requireAuth, requireAdmin);
 router.use(require("./adminContestControls"));
 
+
 const VALID_ROLES = ["student", "admin"];
 const VALID_STATUSES = ["active", "suspended", "deleted"];
 
-async function writeAuditLog({
-  adminId,
-  action,
-  targetType,
-  targetId,
-  details = null,
-}) {
-  await db.execute(
-    `INSERT INTO admin_audit_logs
-      (admin_id, action, target_type, target_id, details)
-     VALUES (?, ?, ?, ?, ?)`,
-    [
-      adminId,
-      action,
-      targetType,
-      targetId,
-      details ? JSON.stringify(details) : null,
-    ],
-  );
-}
 
 async function countActiveAdmins() {
   const [rows] = await db.execute(
@@ -41,17 +24,21 @@ async function countActiveAdmins() {
   return Number(rows[0]?.total || 0);
 }
 
+
 const PROBLEM_DIFFICULTIES = ["easy", "medium", "hard"];
+
 
 const PROBLEM_MAX_CASES = 200;
 const PROBLEM_MAX_CASE_BYTES = 64 * 1024;
 const PROBLEM_MAX_TOTAL_CASE_BYTES = 1024 * 1024;
+
 
 function problemHttpError(statusCode, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
 }
+
 
 function readProblemId(value) {
   const id = Number(value);
@@ -62,6 +49,7 @@ function readProblemId(value) {
 
   return id;
 }
+
 
 function validateProblemCases(cases) {
   if (!Array.isArray(cases)) {
@@ -90,10 +78,7 @@ function validateProblemCases(cases) {
       );
     }
 
-    if (
-      tc.is_sample !== undefined &&
-      typeof tc.is_sample !== "boolean"
-    ) {
+    if (tc.is_sample !== undefined && typeof tc.is_sample !== "boolean") {
       throw problemHttpError(
         400,
         `Test case ${index + 1}: is_sample must be a boolean.`,
@@ -133,6 +118,7 @@ function validateProblemCases(cases) {
   return normalized;
 }
 
+
 function validateProblemBody(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw problemHttpError(400, "A JSON object is required.");
@@ -149,20 +135,13 @@ function validateProblemBody(body) {
     );
   }
 
-  if (
-    typeof body.statement !== "string" ||
-    !body.statement.trim()
-  ) {
+  if (typeof body.statement !== "string" || !body.statement.trim()) {
     throw problemHttpError(400, "Problem statement is required.");
   }
 
   const optionalText = {};
 
-  for (const field of [
-    "input_format",
-    "output_format",
-    "constraints",
-  ]) {
+  for (const field of ["input_format", "output_format", "constraints"]) {
     const value = body[field] ?? "";
 
     if (typeof value !== "string") {
@@ -173,9 +152,9 @@ function validateProblemBody(body) {
   }
 
   const difficulty =
-  typeof body.difficulty === "string"
-    ? body.difficulty.trim().toLowerCase()
-    : "";
+    typeof body.difficulty === "string"
+      ? body.difficulty.trim().toLowerCase()
+      : "";
 
   if (!PROBLEM_DIFFICULTIES.includes(difficulty)) {
     throw problemHttpError(
@@ -252,21 +231,18 @@ function validateProblemBody(body) {
   };
 }
 
+
 async function insertProblemCases(connection, problemId, cases) {
   for (const tc of cases) {
     await connection.execute(
       `INSERT INTO test_cases
         (problem_id, input, expected_output, is_sample)
        VALUES (?, ?, ?, ?)`,
-      [
-        problemId,
-        tc.input,
-        tc.expected_output,
-        tc.is_sample,
-      ],
+      [problemId, tc.input, tc.expected_output, tc.is_sample],
     );
   }
 }
+
 
 function sendProblemError(res, error, label) {
   const expected =
@@ -284,6 +260,7 @@ function sendProblemError(res, error, label) {
       : "Unable to complete the problem-management request.",
   });
 }
+
 
 router.get("/problems", async (req, res) => {
   try {
@@ -324,14 +301,14 @@ router.get("/problems", async (req, res) => {
   }
 });
 
+
 router.get("/problems/:id", async (req, res) => {
   try {
     const id = readProblemId(req.params.id);
 
-    const [rows] = await db.execute(
-      "SELECT * FROM problems WHERE id = ?",
-      [id],
-    );
+    const [rows] = await db.execute("SELECT * FROM problems WHERE id = ?", [
+      id,
+    ]);
 
     if (!rows.length) {
       throw problemHttpError(404, "Problem not found.");
@@ -358,23 +335,19 @@ router.get("/problems/:id", async (req, res) => {
   }
 });
 
+
 async function saveAdminProblem(req, res) {
   let connection;
 
   try {
     const editing = req.method === "PUT";
-    const requestedId = editing
-      ? readProblemId(req.params.id)
-      : null;
+    const requestedId = editing ? readProblemId(req.params.id) : null;
 
     // Require explicit cases on edits to avoid accidental deletion
     // caused by a client forgetting to include the case list.
     if (
       editing &&
-      !Object.prototype.hasOwnProperty.call(
-        req.body ?? {},
-        "test_cases",
-      )
+      !Object.prototype.hasOwnProperty.call(req.body ?? {}, "test_cases")
     ) {
       throw problemHttpError(
         400,
@@ -387,15 +360,23 @@ async function saveAdminProblem(req, res) {
     connection = await db.getConnection();
     await connection.beginTransaction();
 
+    let before = null;
+
     if (editing) {
       const [existing] = await connection.execute(
-        "SELECT id FROM problems WHERE id = ? FOR UPDATE",
+        `SELECT id, title, difficulty, subject_id, time_limit_ms,
+                memory_limit_kb, is_public
+         FROM problems
+         WHERE id = ?
+         FOR UPDATE`,
         [requestedId],
       );
 
       if (!existing.length) {
         throw problemHttpError(404, "Problem not found.");
       }
+
+      before = existing[0];
     }
 
     if (problem.subject_id !== null) {
@@ -405,10 +386,7 @@ async function saveAdminProblem(req, res) {
       );
 
       if (!subjects.length) {
-        throw problemHttpError(
-          400,
-          "The selected subject does not exist.",
-        );
+        throw problemHttpError(400, "The selected subject does not exist.");
       }
     }
 
@@ -444,10 +422,9 @@ async function saveAdminProblem(req, res) {
         [...values, savedId],
       );
 
-      await connection.execute(
-        "DELETE FROM test_cases WHERE problem_id = ?",
-        [savedId],
-      );
+      await connection.execute("DELETE FROM test_cases WHERE problem_id = ?", [
+        savedId,
+      ]);
     } else {
       const [result] = await connection.execute(
         `INSERT INTO problems (
@@ -468,11 +445,66 @@ async function saveAdminProblem(req, res) {
       savedId = result.insertId;
     }
 
-    await insertProblemCases(
-      connection,
-      savedId,
-      problem.test_cases,
-    );
+    await insertProblemCases(connection, savedId, problem.test_cases);
+
+    if (editing) {
+      const changes = diffChanges(before, problem, [
+        "title",
+        "difficulty",
+        "subject_id",
+        "time_limit_ms",
+        "memory_limit_kb",
+        "is_public",
+      ]);
+
+      const publicationChanged =
+        changes !== null &&
+        Object.prototype.hasOwnProperty.call(changes, "is_public");
+
+      await writeAuditLog(connection, {
+        req,
+        action: publicationChanged
+          ? problem.is_public
+            ? "problem_published"
+            : "problem_unpublished"
+          : "problem_updated",
+        category: "problem_management",
+        targetType: "problem",
+        targetId: savedId,
+        description: `Updated problem "${problem.title}".`,
+        details: {
+          title: problem.title,
+          test_case_count: problem.test_cases.length,
+          sample_case_count: problem.test_cases.filter((tc) => tc.is_sample)
+            .length,
+          hidden_case_count: problem.test_cases.filter((tc) => !tc.is_sample)
+            .length,
+        },
+        changes,
+      });
+    } else {
+      await writeAuditLog(connection, {
+        req,
+        action: problem.is_public ? "problem_published" : "problem_created",
+        category: "problem_management",
+        targetType: "problem",
+        targetId: savedId,
+        description: problem.is_public
+          ? `Created and published problem "${problem.title}".`
+          : `Created draft problem "${problem.title}".`,
+        details: {
+          title: problem.title,
+          difficulty: problem.difficulty,
+          subject_id: problem.subject_id,
+          is_public: problem.is_public,
+          test_case_count: problem.test_cases.length,
+          sample_case_count: problem.test_cases.filter((tc) => tc.is_sample)
+            .length,
+          hidden_case_count: problem.test_cases.filter((tc) => !tc.is_sample)
+            .length,
+        },
+      });
+    }
 
     await connection.commit();
 
@@ -495,8 +527,10 @@ async function saveAdminProblem(req, res) {
   }
 }
 
+
 router.post("/problems", saveAdminProblem);
 router.put("/problems/:id", saveAdminProblem);
+
 
 router.post("/problems/:id/testcases", async (req, res) => {
   let connection;
@@ -506,10 +540,7 @@ router.post("/problems/:id/testcases", async (req, res) => {
     const cases = validateProblemCases(req.body?.test_cases);
 
     if (!cases.length) {
-      throw problemHttpError(
-        400,
-        "test_cases must be a non-empty array.",
-      );
+      throw problemHttpError(400, "test_cases must be a non-empty array.");
     }
 
     connection = await db.getConnection();
@@ -541,6 +572,21 @@ router.post("/problems/:id/testcases", async (req, res) => {
 
     await insertProblemCases(connection, id, cases);
 
+    await writeAuditLog(connection, {
+      req,
+      action: "test_cases_added",
+      category: "test_case_management",
+      targetType: "problem",
+      targetId: id,
+      description: `Added ${cases.length} test case(s) to problem #${id}.`,
+      details: {
+        added_count: cases.length,
+        total_count: existing.length + cases.length,
+        sample_count: cases.filter((tc) => tc.is_sample).length,
+        hidden_count: cases.filter((tc) => !tc.is_sample).length,
+      },
+    });
+
     await connection.commit();
 
     res.status(201).json({
@@ -559,6 +605,7 @@ router.post("/problems/:id/testcases", async (req, res) => {
     connection?.release();
   }
 });
+
 
 router.delete("/problems/:id", async (req, res) => {
   const problemId = Number(req.params.id);
@@ -635,32 +682,25 @@ router.delete("/problems/:id", async (req, res) => {
 
     const problem = problemRows[0];
 
-    await connection.execute(
-      "DELETE FROM test_cases WHERE problem_id = ?",
-      [problemId],
-    );
+    await connection.execute("DELETE FROM test_cases WHERE problem_id = ?", [
+      problemId,
+    ]);
 
-    await connection.execute(
-      "DELETE FROM problems WHERE id = ?",
-      [problemId],
-    );
+    await connection.execute("DELETE FROM problems WHERE id = ?", [problemId]);
 
-    await connection.execute(
-      `INSERT INTO admin_audit_logs
-        (admin_id, action, target_type, target_id, details)
-       VALUES (?, ?, ?, ?, ?)`,
-      [
-        req.user.userId,
-        "problem_deleted",
-        "problem",
-        problemId,
-        JSON.stringify({
-          title: problem.title,
-          submission_count: 0,
-          contest_history_count: 0,
-        }),
-      ],
-    );
+    await writeAuditLog(connection, {
+      req,
+      action: "problem_deleted",
+      category: "problem_management",
+      targetType: "problem",
+      targetId: problemId,
+      description: `Deleted problem "${problem.title}".`,
+      details: {
+        title: problem.title,
+        submission_count: 0,
+        contest_history_count: 0,
+      },
+    });
 
     await connection.commit();
 
@@ -673,10 +713,7 @@ router.delete("/problems/:id", async (req, res) => {
       await connection.rollback().catch(() => {});
     }
 
-    if (
-      error.code === "ER_ROW_IS_REFERENCED_2" ||
-      error.errno === 1451
-    ) {
+    if (error.code === "ER_ROW_IS_REFERENCED_2" || error.errno === 1451) {
       return res.status(409).json({
         error:
           "This problem has related records and cannot be deleted. Refresh the page and try again.",
@@ -688,8 +725,7 @@ router.delete("/problems/:id", async (req, res) => {
       error.code === "ER_LOCK_WAIT_TIMEOUT"
     ) {
       return res.status(409).json({
-        error:
-          "The problem is currently being modified. Please try again.",
+        error: "The problem is currently being modified. Please try again.",
       });
     }
 
@@ -702,6 +738,7 @@ router.delete("/problems/:id", async (req, res) => {
     connection?.release();
   }
 });
+
 
 router.post("/contests", async (req, res) => {
   const { title, description, start_time, end_time, problem_ids = [] } =
@@ -719,8 +756,13 @@ router.post("/contests", async (req, res) => {
     });
   }
 
+  let connection;
+
   try {
-    const [contest] = await db.execute(
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [contest] = await connection.execute(
       `INSERT INTO contests
         (title, description, start_time, end_time, created_by, is_public)
        VALUES (?, ?, ?, ?, ?, true)`,
@@ -732,12 +774,13 @@ router.post("/contests", async (req, res) => {
 
     for (let i = 0; i < problem_ids.length; i += 1) {
       if (i >= letters.length) {
-        return res.status(400).json({
-          error: "A contest can contain at most 26 problems.",
-        });
+        throw problemHttpError(
+          400,
+          "A contest can contain at most 26 problems.",
+        );
       }
 
-      await db.execute(
+      await connection.execute(
         `INSERT INTO contest_problems
           (contest_id, problem_id, serial_letter)
          VALUES (?, ?, ?)`,
@@ -745,26 +788,77 @@ router.post("/contests", async (req, res) => {
       );
     }
 
-    const [rows] = await db.execute(
+    await writeAuditLog(connection, {
+      req,
+      action: "contest_created",
+      category: "contest_management",
+      targetType: "contest",
+      targetId: contestId,
+      description: `Created contest "${title}".`,
+      details: {
+        title,
+        start_time: start_time,
+        end_time: end_time,
+        is_public: true,
+        problem_ids,
+      },
+    });
+
+    await connection.commit();
+
+    const [rows] = await connection.execute(
       "SELECT * FROM contests WHERE id = ?",
       [contestId],
     );
 
     res.status(201).json(rows[0]);
   } catch (err) {
-    console.error("Create contest error:", err);
-    res.status(500).json({ error: err.message });
+    if (connection) {
+      await connection.rollback().catch(() => {});
+    }
+
+    const expected =
+      Number.isInteger(err.statusCode) &&
+      err.statusCode >= 400 &&
+      err.statusCode < 500;
+
+    if (!expected) {
+      console.error("Create contest error:", err);
+    }
+
+    res.status(expected ? err.statusCode : 500).json({
+      error: expected ? err.message : "Unable to create contest.",
+    });
+  } finally {
+    connection?.release();
   }
 });
 
-router.get("/contests", async (req,res)=>{
-  try{
-    const [rows]=await db.execute(`SELECT c.*,
-      (SELECT COUNT(*) FROM contest_problems cp WHERE cp.contest_id=c.id AND cp.withdrawn_at IS NULL) AS problem_count
-      FROM contests c ORDER BY c.start_time DESC,c.id DESC`);
+
+router.get("/contests", async (req, res) => {
+  try {
+    const [rows] = await db.execute(`
+      SELECT c.*,
+        (
+          SELECT COUNT(*)
+          FROM contest_problems cp
+          WHERE cp.contest_id = c.id
+            AND cp.withdrawn_at IS NULL
+        ) AS problem_count
+      FROM contests c
+      ORDER BY c.start_time DESC, c.id DESC
+    `);
+
     return res.json(rows);
-  }catch(error){console.error("Admin contest list error:",error);return res.status(500).json({error:"Unable to load contests."});}
+  } catch (error) {
+    console.error("Admin contest list error:", error);
+
+    return res.status(500).json({
+      error: "Unable to load contests.",
+    });
+  }
 });
+
 
 router.get("/contests/:contestId/problems", async (req, res) => {
   const contestId = Number(req.params.contestId);
@@ -791,8 +885,8 @@ router.get("/contests/:contestId/problems", async (req, res) => {
         p.time_limit_ms,
         p.memory_limit_kb,
         cp.serial_letter,
-          cp.withdrawn_at,
-          cp.withdrawn_reason
+        cp.withdrawn_at,
+        cp.withdrawn_reason
       FROM contest_problems AS cp
       INNER JOIN problems AS p
         ON p.id = cp.problem_id
@@ -808,23 +902,46 @@ router.get("/contests/:contestId/problems", async (req, res) => {
   }
 });
 
-async function handleLiveProblem(req,res,action){
-  try{
-    const result=await changeContestProblem({
-      contestId:req.params.contestId,
-      problemId:action==="add"?req.body?.problem_id:req.params.problemId,
-      adminId:req.user.userId,action,
-      reason:req.body?.reason,expectedRevision:req.body?.expected_revision,
+
+async function handleLiveProblem(req, res, action) {
+  try {
+    const result = await changeContestProblem({
+      req,
+      contestId: req.params.contestId,
+      problemId:
+        action === "add" ? req.body?.problem_id : req.params.problemId,
+      adminId: req.user.userId,
+      action,
+      reason: req.body?.reason,
+      expectedRevision: req.body?.expected_revision,
     });
-    return res.status(action==="add"?201:200).json(result);
-  }catch(error){
-    const expected=Number.isInteger(error.statusCode)&&error.statusCode>=400&&error.statusCode<500;
-    if(!expected)console.error("Live contest problem error:",error);
-    return res.status(expected?error.statusCode:500).json({error:expected?error.message:"Unable to change contest problems."});
+
+    return res.status(action === "add" ? 201 : 200).json(result);
+  } catch (error) {
+    const expected =
+      Number.isInteger(error.statusCode) &&
+      error.statusCode >= 400 &&
+      error.statusCode < 500;
+
+    if (!expected) {
+      console.error("Live contest problem error:", error);
+    }
+
+    return res.status(expected ? error.statusCode : 500).json({
+      error: expected ? error.message : "Unable to change contest problems.",
+    });
   }
 }
-router.post("/contests/:contestId/problems",(req,res)=>handleLiveProblem(req,res,"add"));
-router.delete("/contests/:contestId/problems/:problemId",(req,res)=>handleLiveProblem(req,res,"withdraw"));
+
+
+router.post("/contests/:contestId/problems", (req, res) =>
+  handleLiveProblem(req, res, "add"),
+);
+
+router.delete("/contests/:contestId/problems/:problemId", (req, res) =>
+  handleLiveProblem(req, res, "withdraw"),
+);
+
 
 router.get("/submissions", async (req, res) => {
   try {
@@ -857,6 +974,7 @@ router.get("/submissions", async (req, res) => {
     res.status(500).json({ error: "Unable to load submissions." });
   }
 });
+
 
 router.get("/users", async (req, res) => {
   const search = String(req.query.search || "").trim();
@@ -899,6 +1017,7 @@ router.get("/users", async (req, res) => {
     res.status(500).json({ error: "Unable to load users." });
   }
 });
+
 
 router.get("/users/:userId", async (req, res) => {
   const userId = Number(req.params.userId);
@@ -947,6 +1066,7 @@ router.get("/users/:userId", async (req, res) => {
   }
 });
 
+
 router.patch("/users/:userId/role", async (req, res) => {
   const userId = Number(req.params.userId);
   const newRole = String(req.body.role || "").toLowerCase();
@@ -967,22 +1087,39 @@ router.patch("/users/:userId/role", async (req, res) => {
     });
   }
 
+  let connection;
+
   try {
-    const [userRows] = await db.execute(
-      `SELECT id, name, email, role, status
-       FROM users
-       WHERE id = ?
-       LIMIT 1`,
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [userRows] = await connection.execute(
+      `SELECT
+        id,
+        name,
+        email,
+        role,
+        status,
+        suspended_at,
+        suspended_reason
+      FROM users
+      WHERE id = ?
+      LIMIT 1
+      FOR UPDATE`,
       [userId],
     );
 
     if (userRows.length === 0) {
+      await connection.rollback();
+
       return res.status(404).json({ error: "User not found." });
     }
 
     const targetUser = userRows[0];
 
     if (targetUser.role === newRole) {
+      await connection.rollback();
+
       return res.json({
         message: "User already has this role.",
         user: targetUser,
@@ -997,29 +1134,34 @@ router.patch("/users/:userId/role", async (req, res) => {
       const activeAdminCount = await countActiveAdmins();
 
       if (activeAdminCount <= 1) {
+        await connection.rollback();
+
         return res.status(400).json({
           error: "The last active administrator cannot be demoted.",
         });
       }
     }
 
-    await db.execute(
-      "UPDATE users SET role = ? WHERE id = ?",
-      [newRole, userId],
-    );
+    await connection.execute("UPDATE users SET role = ? WHERE id = ?", [
+      newRole,
+      userId,
+    ]);
 
-    await writeAuditLog({
-      adminId: req.user.userId,
+    await writeAuditLog(connection, {
+      req,
       action: "role_changed",
+      category: "user_management",
       targetType: "user",
       targetId: userId,
+      description: `Changed role for ${targetUser.name} from ${targetUser.role} to ${newRole}.`,
       details: {
         target_name: targetUser.name,
         target_email: targetUser.email,
-        previous_role: targetUser.role,
-        new_role: newRole,
       },
+      changes: diffChanges(targetUser, { role: newRole }, ["role"]),
     });
+
+    await connection.commit();
 
     const [updatedRows] = await db.execute(
       `SELECT
@@ -1041,10 +1183,17 @@ router.patch("/users/:userId/role", async (req, res) => {
       user: updatedRows[0],
     });
   } catch (err) {
+    if (connection) {
+      await connection.rollback().catch(() => {});
+    }
+
     console.error("Update user role error:", err);
     res.status(500).json({ error: "Unable to update user role." });
+  } finally {
+    connection?.release();
   }
 });
+
 
 router.patch("/users/:userId/status", async (req, res) => {
   const userId = Number(req.params.userId);
@@ -1067,22 +1216,39 @@ router.patch("/users/:userId/status", async (req, res) => {
     });
   }
 
+  let connection;
+
   try {
-    const [userRows] = await db.execute(
-      `SELECT id, name, email, role, status
-       FROM users
-       WHERE id = ?
-       LIMIT 1`,
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [userRows] = await connection.execute(
+      `SELECT
+        id,
+        name,
+        email,
+        role,
+        status,
+        suspended_at,
+        suspended_reason
+      FROM users
+      WHERE id = ?
+      LIMIT 1
+      FOR UPDATE`,
       [userId],
     );
 
     if (userRows.length === 0) {
+      await connection.rollback();
+
       return res.status(404).json({ error: "User not found." });
     }
 
     const targetUser = userRows[0];
 
     if (targetUser.status === newStatus) {
+      await connection.rollback();
+
       return res.json({
         message: "User already has this status.",
         user: targetUser,
@@ -1098,18 +1264,18 @@ router.patch("/users/:userId/status", async (req, res) => {
       const activeAdminCount = await countActiveAdmins();
 
       if (activeAdminCount <= 1) {
+        await connection.rollback();
+
         return res.status(400).json({
-          error:
-            "The last active administrator cannot be suspended or deleted.",
+          error: "The last active administrator cannot be suspended or deleted.",
         });
       }
     }
 
     const suspendedAt = newStatus === "suspended" ? new Date() : null;
-    const suspendedReason =
-      newStatus === "suspended" ? reason || null : null;
+    const suspendedReason = newStatus === "suspended" ? reason || null : null;
 
-    await db.execute(
+    await connection.execute(
       `UPDATE users
        SET status = ?, suspended_at = ?, suspended_reason = ?
        WHERE id = ?`,
@@ -1122,19 +1288,30 @@ router.patch("/users/:userId/status", async (req, res) => {
       deleted: "user_soft_deleted",
     };
 
-    await writeAuditLog({
-      adminId: req.user.userId,
+    await writeAuditLog(connection, {
+      req,
       action: actionMap[newStatus],
+      category: "user_management",
       targetType: "user",
       targetId: userId,
+      description: `Changed status for ${targetUser.name} from ${targetUser.status} to ${newStatus}.`,
       details: {
         target_name: targetUser.name,
         target_email: targetUser.email,
-        previous_status: targetUser.status,
-        new_status: newStatus,
-        reason: newStatus === "suspended" ? reason || null : null,
       },
+      changes: diffChanges(
+        targetUser,
+        {
+          status: newStatus,
+          suspended_at: suspendedAt,
+          suspended_reason: suspendedReason,
+        },
+        ["status", "suspended_at", "suspended_reason"],
+      ),
+      reason: newStatus === "suspended" ? reason || null : null,
     });
+
+    await connection.commit();
 
     const [updatedRows] = await db.execute(
       `SELECT
@@ -1156,37 +1333,420 @@ router.patch("/users/:userId/status", async (req, res) => {
       user: updatedRows[0],
     });
   } catch (err) {
+    if (connection) {
+      await connection.rollback().catch(() => {});
+    }
+
     console.error("Update user status error:", err);
     res.status(500).json({ error: "Unable to update user status." });
+  } finally {
+    connection?.release();
   }
 });
 
+
+function auditQueryError(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  return error;
+}
+
+
+function auditQueryString(query, key, maxLength = 100) {
+  const value = query[key];
+
+  if (value === undefined) return "";
+
+  if (typeof value !== "string") {
+    throw auditQueryError(`${key} must be a single string.`);
+  }
+
+  const normalized = value.trim();
+
+  if (normalized.length > maxLength) {
+    throw auditQueryError(
+      `${key} must not exceed ${maxLength} characters.`,
+    );
+  }
+
+  return normalized;
+}
+
+
+function auditPositiveInteger(value, label, fallback, maximum) {
+  if (value === "") return fallback;
+
+  if (!/^[1-9]\d*$/.test(value)) {
+    throw auditQueryError(`${label} must be a positive integer.`);
+  }
+
+  const number = Number(value);
+
+  if (!Number.isSafeInteger(number) || number > maximum) {
+    throw auditQueryError(
+      `${label} must not exceed ${maximum}.`,
+    );
+  }
+
+  return number;
+}
+
+
+function auditDate(value, label) {
+  if (!value) return null;
+
+  // Require explicit UTC to avoid browser/server timezone ambiguity.
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+  ) {
+    throw auditQueryError(
+      `${label} must be a UTC ISO timestamp, for example 2026-10-28T00:00:00.000Z.`,
+    );
+  }
+
+  const date = new Date(value);
+
+  if (
+    !Number.isFinite(date.getTime()) ||
+    date.toISOString() !== value
+  ) {
+    throw auditQueryError(`${label} is not a valid timestamp.`);
+  }
+
+  return date;
+}
+
+
+function auditSearchPattern(value) {
+  // Treat LIKE wildcard characters as literal search text.
+  return `%${value.replace(/[!%_]/g, (character) => `!${character}`)}%`;
+}
+
+
+function parseAuditJson(value) {
+  if (value === null || value === undefined) return null;
+
+  // mysql2 may already return parsed JSON.
+  if (typeof value !== "string") return value;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {
+      unavailable: true,
+      note: "Stored metadata could not be decoded.",
+    };
+  }
+}
+
+
+// List audit events. Authentication and admin authorization are
+// inherited from router.use(requireAuth, requireAdmin).
 router.get("/audit-logs", async (req, res) => {
+  try {
+    const allowedParameters = new Set([
+      "page",
+      "page_size",
+      "search",
+      "action",
+      "category",
+      "admin_id",
+      "target_type",
+      "target_id",
+      "outcome",
+      "from",
+      "to",
+      "sort",
+    ]);
+
+    for (const key of Object.keys(req.query)) {
+      if (!allowedParameters.has(key)) {
+        throw auditQueryError(
+          `Unsupported query parameter: ${key}.`,
+        );
+      }
+    }
+
+    const requestedPage = auditPositiveInteger(
+      auditQueryString(req.query, "page", 10),
+      "page",
+      1,
+      1000000,
+    );
+
+    const pageSize = auditPositiveInteger(
+      auditQueryString(req.query, "page_size", 3),
+      "page_size",
+      25,
+      100,
+    );
+
+    const search = auditQueryString(req.query, "search", 150);
+    const action = auditQueryString(req.query, "action", 100);
+    const category = auditQueryString(req.query, "category", 50);
+    const adminIdValue = auditQueryString(req.query, "admin_id", 10);
+    const targetType = auditQueryString(req.query, "target_type", 50);
+    const targetId = auditQueryString(req.query, "target_id", 64);
+    const outcome = auditQueryString(req.query, "outcome", 20);
+    const sort =
+      auditQueryString(req.query, "sort", 10) || "newest";
+
+    const from = auditDate(
+      auditQueryString(req.query, "from", 24),
+      "from",
+    );
+
+    const to = auditDate(
+      auditQueryString(req.query, "to", 24),
+      "to",
+    );
+
+    if (!["newest", "oldest"].includes(sort)) {
+      throw auditQueryError("sort must be newest or oldest.");
+    }
+
+    if (
+      outcome &&
+      !["success", "failure", "denied"].includes(outcome)
+    ) {
+      throw auditQueryError(
+        "outcome must be success, failure, or denied.",
+      );
+    }
+
+    if (from && to && from.getTime() > to.getTime()) {
+      throw auditQueryError(
+        "from must be earlier than or equal to to.",
+      );
+    }
+
+    const adminId = adminIdValue
+      ? auditPositiveInteger(
+          adminIdValue,
+          "admin_id",
+          null,
+          2147483647,
+        )
+      : null;
+
+    const conditions = [];
+    const values = [];
+
+    if (action) {
+      conditions.push("a.action = ?");
+      values.push(action);
+    }
+
+    if (category) {
+      conditions.push("a.category = ?");
+      values.push(category);
+    }
+
+    if (adminId !== null) {
+      conditions.push("a.admin_id = ?");
+      values.push(adminId);
+    }
+
+    if (targetType) {
+      conditions.push("a.target_type = ?");
+      values.push(targetType);
+    }
+
+    if (targetId) {
+      conditions.push("a.target_id = ?");
+      values.push(targetId);
+    }
+
+    if (outcome) {
+      conditions.push("a.outcome = ?");
+      values.push(outcome);
+    }
+
+    if (from) {
+      conditions.push("a.created_at >= ?");
+      values.push(from);
+    }
+
+    if (to) {
+      conditions.push("a.created_at <= ?");
+      values.push(to);
+    }
+
+    if (search) {
+      const pattern = auditSearchPattern(search);
+
+      conditions.push(`
+        (
+          a.description LIKE ? ESCAPE '!'
+          OR a.action LIKE ? ESCAPE '!'
+          OR a.target_type LIKE ? ESCAPE '!'
+          OR a.target_id LIKE ? ESCAPE '!'
+          OR CAST(a.id AS CHAR) LIKE ? ESCAPE '!'
+          OR CAST(a.admin_id AS CHAR) LIKE ? ESCAPE '!'
+          OR COALESCE(NULLIF(a.admin_name, ''), u.name, '')
+            LIKE ? ESCAPE '!'
+          OR COALESCE(NULLIF(a.admin_email, ''), u.email, '')
+            LIKE ? ESCAPE '!'
+        )
+      `);
+
+      values.push(
+        pattern,
+        pattern,
+        pattern,
+        pattern,
+        pattern,
+        pattern,
+        pattern,
+        pattern,
+      );
+    }
+
+    const where = conditions.length
+      ? `WHERE ${conditions.join(" AND ")}`
+      : "";
+
+    const [countRows] = await db.execute(
+      `SELECT COUNT(*) AS total
+       FROM admin_audit_logs AS a
+       LEFT JOIN users AS u ON u.id = a.admin_id
+       ${where}`,
+      values,
+    );
+
+    const total = Number(countRows[0].total);
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(requestedPage, totalPages);
+    const offset = (page - 1) * pageSize;
+
+    const direction = sort === "oldest" ? "ASC" : "DESC";
+
+    // pageSize and offset are validated server-generated integers.
+    const [rows] = await db.execute(
+      `SELECT
+        a.id,
+        a.admin_id,
+        COALESCE(
+          NULLIF(a.admin_name, ''),
+          u.name,
+          CONCAT('Administrator #', a.admin_id),
+          'Unknown administrator'
+        ) AS admin_name,
+        COALESCE(
+          NULLIF(a.admin_email, ''),
+          u.email
+        ) AS admin_email,
+        a.action,
+        a.category,
+        a.target_type,
+        a.target_id,
+        a.description,
+        a.outcome,
+        a.created_at
+      FROM admin_audit_logs AS a
+      LEFT JOIN users AS u ON u.id = a.admin_id
+      ${where}
+      ORDER BY a.created_at ${direction}, a.id ${direction}
+      LIMIT ${pageSize} OFFSET ${offset}`,
+      values,
+    );
+
+    return res.json({
+      items: rows,
+      pagination: {
+        page,
+        page_size: pageSize,
+        total,
+        total_pages: totalPages,
+        from: total ? offset + 1 : 0,
+        to: Math.min(offset + pageSize, total),
+      },
+      sort,
+    });
+  } catch (error) {
+    if (error.statusCode === 400) {
+      return res.status(400).json({
+        error: error.message,
+      });
+    }
+
+    console.error("Admin audit log list error:", error);
+
+    return res.status(500).json({
+      error: "Unable to load audit logs.",
+    });
+  }
+});
+
+
+// Read one event, including safe metadata and before/after changes.
+router.get("/audit-logs/:id", async (req, res) => {
+  const id = req.params.id;
+
+  // Keep BIGINT event IDs as strings to avoid JS precision loss.
+  if (
+    !/^[1-9]\d{0,19}$/.test(id) ||
+    BigInt(id) > 18446744073709551615n
+  ) {
+    return res.status(400).json({
+      error: "Invalid audit event ID.",
+    });
+  }
+
   try {
     const [rows] = await db.execute(
       `SELECT
         a.id,
+        a.admin_id,
+        COALESCE(
+          NULLIF(a.admin_name, ''),
+          u.name,
+          CONCAT('Administrator #', a.admin_id),
+          'Unknown administrator'
+        ) AS admin_name,
+        COALESCE(
+          NULLIF(a.admin_email, ''),
+          u.email
+        ) AS admin_email,
         a.action,
+        a.category,
         a.target_type,
         a.target_id,
+        a.description,
         a.details,
-        a.created_at,
-        admin.name AS admin_name,
-        admin.email AS admin_email
+        a.changes,
+        a.reason,
+        a.outcome,
+        a.ip_address,
+        a.user_agent,
+        a.request_id,
+        a.created_at
       FROM admin_audit_logs AS a
-      INNER JOIN users AS admin
-        ON admin.id = a.admin_id
-      ORDER BY a.created_at DESC, a.id DESC
-      LIMIT 200`,
+      LEFT JOIN users AS u ON u.id = a.admin_id
+      WHERE a.id = ?
+      LIMIT 1`,
+      [id],
     );
 
-    res.json(rows);
-  } catch (err) {
-    console.error("Admin audit log error:", err);
-    res.status(500).json({ error: "Unable to load audit logs." });
+    if (!rows.length) {
+      return res.status(404).json({
+        error: "Audit event not found.",
+      });
+    }
+
+    return res.json({
+      ...rows[0],
+      details: parseAuditJson(rows[0].details),
+      changes: parseAuditJson(rows[0].changes),
+    });
+  } catch (error) {
+    console.error("Admin audit log detail error:", error);
+
+    return res.status(500).json({
+      error: "Unable to load audit event.",
+    });
   }
 });
-
 
 
 module.exports = router;

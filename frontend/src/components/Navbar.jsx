@@ -103,6 +103,11 @@ function Navbar() {
       icon: Users,
     },
     {
+      to: "/admin/audit-logs",
+      label: "Audit Logs",
+      icon: ScrollText,
+    },
+    {
       to: "/admin/dashboard",
       label: "Admin Dashboard",
       icon: LayoutDashboard,

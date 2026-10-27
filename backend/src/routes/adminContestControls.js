@@ -1,18 +1,22 @@
 const express = require("express");
 const router = express.Router();
-
+const { writeAuditLog } = require("../utils/auditLog");
 const db = require("../db");
+
 
 const {
   requireAuth,
   requireAdmin,
 } = require("../middleware/auth");
 
+
 const {
   getContestClock,
 } = require("../utils/contestClock");
 
+
 router.use(requireAuth, requireAdmin);
+
 
 function fail(statusCode, message) {
   const error = new Error(message);
@@ -20,11 +24,9 @@ function fail(statusCode, message) {
   return error;
 }
 
+
 function parseId(value) {
-  if (
-    typeof value !== "string" ||
-    !/^[1-9]\d*$/.test(value)
-  ) {
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) {
     throw fail(400, "Invalid contest ID.");
   }
 
@@ -37,19 +39,14 @@ function parseId(value) {
   return id;
 }
 
+
 function has(object, field) {
-  return Object.prototype.hasOwnProperty.call(
-    object,
-    field,
-  );
+  return Object.prototype.hasOwnProperty.call(object, field);
 }
 
+
 function validateBody(body, allowedFields) {
-  if (
-    !body ||
-    typeof body !== "object" ||
-    Array.isArray(body)
-  ) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw fail(400, "A JSON object is required.");
   }
 
@@ -58,20 +55,11 @@ function validateBody(body, allowedFields) {
   );
 
   if (unsupported.length > 0) {
-    throw fail(
-      400,
-      `Unsupported fields: ${unsupported.join(", ")}.`,
-    );
+    throw fail(400, `Unsupported fields: ${unsupported.join(", ")}.`);
   }
 
-  if (
-    !Number.isSafeInteger(body.expected_revision) ||
-    body.expected_revision < 1
-  ) {
-    throw fail(
-      400,
-      "expected_revision must be a positive integer.",
-    );
+  if (!Number.isSafeInteger(body.expected_revision) || body.expected_revision < 1) {
+    throw fail(400, "expected_revision must be a positive integer.");
   }
 
   if (
@@ -79,23 +67,19 @@ function validateBody(body, allowedFields) {
     !body.reason.trim() ||
     body.reason.trim().length > 1000
   ) {
-    throw fail(
-      400,
-      "A reason between 1 and 1000 characters is required.",
-    );
+    throw fail(400, "A reason between 1 and 1000 characters is required.");
   }
 
   return body.reason.trim();
 }
+
 
 // Canonical UTC strings with whole-second precision.
 // The existing schedule columns are DATETIME without fractions.
 function parseScheduleTime(value, field) {
   if (
     typeof value !== "string" ||
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z$/.test(
-      value,
-    )
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z$/.test(value)
   ) {
     throw fail(
       400,
@@ -105,15 +89,13 @@ function parseScheduleTime(value, field) {
 
   const date = new Date(value);
 
-  if (
-    !Number.isFinite(date.getTime()) ||
-    date.toISOString() !== value
-  ) {
+  if (!Number.isFinite(date.getTime()) || date.toISOString() !== value) {
     throw fail(400, `${field} is not a valid date.`);
   }
 
   return date;
 }
+
 
 function publicContest(contest, now) {
   return {
@@ -122,6 +104,7 @@ function publicContest(contest, now) {
     timezone: "Asia/Dhaka",
   };
 }
+
 
 function sendError(res, error) {
   const expected =
@@ -140,6 +123,7 @@ function sendError(res, error) {
   });
 }
 
+
 async function withContestLock(contestId, callback) {
   const connection = await db.getConnection();
   let started = false;
@@ -149,12 +133,10 @@ async function withContestLock(contestId, callback) {
     started = true;
 
     const [rows] = await connection.execute(
-      `
-      SELECT *
-      FROM contests
-      WHERE id = ?
-      FOR UPDATE
-      `,
+      `SELECT *
+       FROM contests
+       WHERE id = ?
+       FOR UPDATE`,
       [contestId],
     );
 
@@ -182,10 +164,7 @@ async function withContestLock(contestId, callback) {
       try {
         await connection.rollback();
       } catch (rollbackError) {
-        console.error(
-          "Contest control rollback error:",
-          rollbackError,
-        );
+        console.error("Contest control rollback error:", rollbackError);
       }
     }
 
@@ -195,9 +174,10 @@ async function withContestLock(contestId, callback) {
   }
 }
 
-async function recordChange(
-  connection,
-  {
+
+async function recordChange(connection, event) {
+  const {
+    req,
     adminId,
     contestId,
     revision,
@@ -206,58 +186,67 @@ async function recordChange(
     after,
     reason,
     announcement,
-  },
-) {
-  await connection.execute(
-    `
-    INSERT INTO admin_audit_logs (
-      admin_id,
-      action,
-      target_type,
-      target_id,
-      details
-    )
-    VALUES (?, ?, 'contest', ?, ?)
-    `,
-    [
-      adminId,
-      action,
-      contestId,
-      JSON.stringify({
-        before,
-        after,
-        reason,
-        revision,
-      }),
-    ],
-  );
+  } = event;
+
+  const changes = {};
+
+  for (const field of new Set([
+    ...Object.keys(before ?? {}),
+    ...Object.keys(after ?? {}),
+  ])) {
+    const previous = before?.[field] ?? null;
+    const next = after?.[field] ?? null;
+
+    const previousValue =
+      previous instanceof Date
+        ? previous.toISOString()
+        : previous;
+
+    const nextValue =
+      next instanceof Date
+        ? next.toISOString()
+        : next;
+
+    if (previousValue !== nextValue) {
+      changes[field] = {
+        before: previousValue,
+        after: nextValue,
+      };
+    }
+  }
+
+  await writeAuditLog(connection, {
+    req,
+    adminId,
+    action,
+    category: "contest_management",
+    targetType: "contest",
+    targetId: contestId,
+    description:
+      action === "contest_ended_early"
+        ? `Ended contest #${contestId} early.`
+        : action === "contest_schedule_changed"
+          ? `Updated the schedule for contest #${contestId}.`
+          : `Updated details for contest #${contestId}.`,
+    details: {
+      revision,
+      announcement,
+    },
+    changes: Object.keys(changes).length ? changes : null,
+    reason,
+    outcome: "success",
+  });
 
   await connection.execute(
-    `
-    INSERT INTO contest_announcements (
-      contest_id,
-      admin_id,
-      contest_revision,
-      event_type,
-      message
-    )
-    VALUES (?, ?, ?, ?, ?)
-    `,
-    [
-      contestId,
-      adminId,
-      revision,
-      action,
-      announcement,
-    ],
+    `INSERT INTO contest_announcements
+      (contest_id, admin_id, contest_revision, event_type, message)
+     VALUES (?, ?, ?, ?, ?)`,
+    [contestId, adminId, revision, action, announcement],
   );
 }
 
-async function readUpdatedContest(
-  connection,
-  contestId,
-  now,
-) {
+
+async function readUpdatedContest(connection, contestId, now) {
   const [rows] = await connection.execute(
     "SELECT * FROM contests WHERE id = ?",
     [contestId],
@@ -266,27 +255,24 @@ async function readUpdatedContest(
   return publicContest(rows[0], now);
 }
 
+
 // Read-only admin contest details.
 router.get("/contests/:id", async (req, res) => {
   try {
     const contestId = parseId(req.params.id);
 
-    const [rows] = await db.execute(
-      "SELECT * FROM contests WHERE id = ?",
-      [contestId],
-    );
+    const [rows] = await db.execute("SELECT * FROM contests WHERE id = ?", [
+      contestId,
+    ]);
 
     if (rows.length === 0) {
       throw fail(404, "Contest not found.");
     }
 
-    const [clockRows] = await db.execute(
-      "SELECT NOW(3) AS server_now",
-    );
+    const [clockRows] = await db.execute("SELECT NOW(3) AS server_now");
 
     const [announcements] = await db.execute(
-      `
-      SELECT
+      `SELECT
         id,
         contest_revision,
         event_type,
@@ -295,22 +281,19 @@ router.get("/contests/:id", async (req, res) => {
       FROM contest_announcements
       WHERE contest_id = ?
       ORDER BY id DESC
-      LIMIT 20
-      `,
+      LIMIT 20`,
       [contestId],
     );
 
     return res.json({
-      ...publicContest(
-        rows[0],
-        clockRows[0].server_now,
-      ),
+      ...publicContest(rows[0], clockRows[0].server_now),
       announcements,
     });
   } catch (error) {
     return sendError(res, error);
   }
 });
+
 
 // Edit metadata or safely change the schedule.
 router.patch("/contests/:id", async (req, res) => {
@@ -329,29 +312,21 @@ router.patch("/contests/:id", async (req, res) => {
     const result = await withContestLock(
       contestId,
       async (connection, contest, now) => {
-        if (
-          Number(contest.revision) !==
-          req.body.expected_revision
-        ) {
+        if (Number(contest.revision) !== req.body.expected_revision) {
           throw fail(
             409,
             "This contest was changed by another request. Reload it before saving.",
           );
         }
 
-        const title = has(req.body, "title")
-          ? req.body.title
-          : contest.title;
+        const title = has(req.body, "title") ? req.body.title : contest.title;
 
         if (
           typeof title !== "string" ||
           !title.trim() ||
           Array.from(title.trim()).length > 200
         ) {
-          throw fail(
-            400,
-            "Title must contain between 1 and 200 characters.",
-          );
+          throw fail(400, "Title must contain between 1 and 200 characters.");
         }
 
         const description = has(req.body, "description")
@@ -360,10 +335,8 @@ router.patch("/contests/:id", async (req, res) => {
 
         if (
           description !== null &&
-          (
-            typeof description !== "string" ||
-            Buffer.byteLength(description, "utf8") > 60000
-          )
+          (typeof description !== "string" ||
+            Buffer.byteLength(description, "utf8") > 60000)
         ) {
           throw fail(
             400,
@@ -372,29 +345,16 @@ router.patch("/contests/:id", async (req, res) => {
         }
 
         const start = has(req.body, "start_time")
-          ? parseScheduleTime(
-              req.body.start_time,
-              "start_time",
-            )
+          ? parseScheduleTime(req.body.start_time, "start_time")
           : contest.start_time;
 
         const end = has(req.body, "end_time")
-          ? parseScheduleTime(
-              req.body.end_time,
-              "end_time",
-            )
+          ? parseScheduleTime(req.body.end_time, "end_time")
           : contest.end_time;
 
-        const startChanged =
-          start.getTime() !==
-          contest.start_time.getTime();
-
-        const endChanged =
-          end.getTime() !==
-          contest.end_time.getTime();
-
-        const scheduleChanged =
-          startChanged || endChanged;
+        const startChanged = start.getTime() !== contest.start_time.getTime();
+        const endChanged = end.getTime() !== contest.end_time.getTime();
+        const scheduleChanged = startChanged || endChanged;
 
         const clock = getContestClock(contest, now);
 
@@ -414,10 +374,7 @@ router.patch("/contests/:id", async (req, res) => {
           }
 
           if (end.getTime() <= start.getTime()) {
-            throw fail(
-              400,
-              "The end time must be later than the start time.",
-            );
+            throw fail(400, "The end time must be later than the start time.");
           }
 
           if (end.getTime() <= now.getTime()) {
@@ -445,16 +402,13 @@ router.patch("/contests/:id", async (req, res) => {
           }
 
           if (startChanged) {
-            const [submissionRows] =
-              await connection.execute(
-                `
-                SELECT id
-                FROM submissions
-                WHERE contest_id = ?
-                LIMIT 1
-                `,
-                [contestId],
-              );
+            const [submissionRows] = await connection.execute(
+              `SELECT id
+               FROM submissions
+               WHERE contest_id = ?
+               LIMIT 1`,
+              [contestId],
+            );
 
             if (submissionRows.length > 0) {
               throw fail(
@@ -486,16 +440,14 @@ router.patch("/contests/:id", async (req, res) => {
         const revision = Number(contest.revision) + 1;
 
         await connection.execute(
-          `
-          UPDATE contests
-          SET
-            title = ?,
-            description = ?,
-            start_time = ?,
-            end_time = ?,
-            revision = ?
-          WHERE id = ?
-          `,
+          `UPDATE contests
+           SET
+             title = ?,
+             description = ?,
+             start_time = ?,
+             end_time = ?,
+             revision = ?
+           WHERE id = ?`,
           [
             next.title,
             next.description,
@@ -520,6 +472,7 @@ router.patch("/contests/:id", async (req, res) => {
           : `Contest details have been updated. Reason: ${reason}`;
 
         await recordChange(connection, {
+          req,
           adminId: req.user.userId,
           contestId,
           revision,
@@ -537,11 +490,7 @@ router.patch("/contests/:id", async (req, res) => {
 
         return {
           message: "Contest updated successfully.",
-          contest: await readUpdatedContest(
-            connection,
-            contestId,
-            now,
-          ),
+          contest: await readUpdatedContest(connection, contestId, now),
         };
       },
     );
@@ -552,23 +501,18 @@ router.patch("/contests/:id", async (req, res) => {
   }
 });
 
+
 // Explicit early closure. Never overwrites the scheduled deadline.
 router.post("/contests/:id/end", async (req, res) => {
   try {
     const contestId = parseId(req.params.id);
 
-    const reason = validateBody(req.body, [
-      "expected_revision",
-      "reason",
-    ]);
+    const reason = validateBody(req.body, ["expected_revision", "reason"]);
 
     const result = await withContestLock(
       contestId,
       async (connection, contest, now) => {
-        if (
-          Number(contest.revision) !==
-          req.body.expected_revision
-        ) {
+        if (Number(contest.revision) !== req.body.expected_revision) {
           throw fail(
             409,
             "This contest was changed by another request. Reload it before ending it.",
@@ -581,24 +525,20 @@ router.post("/contests/:id/end", async (req, res) => {
           clock.status !== "live" ||
           now.getTime() <= contest.start_time.getTime()
         ) {
-          throw fail(
-            409,
-            "Only a currently running contest can be ended now.",
-          );
+          throw fail(409, "Only a currently running contest can be ended now.");
         }
 
         const revision = Number(contest.revision) + 1;
 
         await connection.execute(
-          `
-          UPDATE contests
-          SET ended_at = ?, revision = ?
-          WHERE id = ?
-          `,
+          `UPDATE contests
+           SET ended_at = ?, revision = ?
+           WHERE id = ?`,
           [now, revision, contestId],
         );
 
         await recordChange(connection, {
+          req,
           adminId: req.user.userId,
           contestId,
           revision,
@@ -612,17 +552,12 @@ router.post("/contests/:id/end", async (req, res) => {
             scheduled_end_time: contest.end_time,
           },
           reason,
-          announcement:
-            `The contest was ended early at ${now.toISOString()}. Reason: ${reason}`,
+          announcement: `The contest was ended early at ${now.toISOString()}. Reason: ${reason}`,
         });
 
         return {
           message: "Contest ended successfully.",
-          contest: await readUpdatedContest(
-            connection,
-            contestId,
-            now,
-          ),
+          contest: await readUpdatedContest(connection, contestId, now),
         };
       },
     );
@@ -632,5 +567,6 @@ router.post("/contests/:id/end", async (req, res) => {
     return sendError(res, error);
   }
 });
+
 
 module.exports = router;
