@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const db = require("../db");
+const { requireAuth } = require("../middleware/auth");
 
 // GET all semesters
 router.get("/semesters", async (req, res) => {
@@ -13,11 +14,11 @@ router.get("/semesters", async (req, res) => {
       `,
     );
 
-    res.json(rows);
+    return res.json(rows);
   } catch (err) {
     console.error("GET /semesters error:", err);
 
-    res.status(500).json({
+    return res.status(500).json({
       error: "Failed to fetch semesters",
     });
   }
@@ -38,65 +39,82 @@ router.get("/semesters/:semesterId/subjects", async (req, res) => {
       [semesterId],
     );
 
-    res.json(rows);
+    return res.json(rows);
   } catch (err) {
     console.error("GET /semesters/:semesterId/subjects error:", err);
 
-    res.status(500).json({
+    return res.status(500).json({
       error: "Failed to fetch subjects",
     });
   }
 });
 
-// GET topics for a subject
-router.get("/subjects/:subjectId/topics", async (req, res) => {
-  try {
-    const { subjectId } = req.params;
-    const userId = req.query.userId || null;
+// Public lesson list, with personal progress for authenticated requests.
+router.get(
+  "/subjects/:subjectId/topics",
+  (req, res, next) => {
+    // Guests may browse. If credentials are supplied, validate them.
+    if (req.headers.authorization !== undefined) {
+      return requireAuth(req, res, next);
+    }
 
-    if (userId) {
-      const [rows] = await db.query(
+    return next();
+  },
+  async (req, res) => {
+    const rawSubjectId = req.params.subjectId;
+    const subjectId = Number(rawSubjectId);
+
+    if (
+      !/^[1-9]\d*$/.test(rawSubjectId) ||
+      !Number.isSafeInteger(subjectId)
+    ) {
+      return res.status(400).json({
+        error: "Invalid subject ID.",
+      });
+    }
+
+    // Never use a userId supplied in query parameters.
+    const userId = req.user?.userId ?? null;
+
+    try {
+      const [rows] = await db.execute(
         `
           SELECT
-            lt.*,
+            lt.id,
+            lt.subject_id,
+            lt.order_index,
+            lt.title,
             CASE
               WHEN tp.id IS NOT NULL THEN 1
               ELSE 0
             END AS completed
           FROM learn_topics AS lt
+          INNER JOIN semester_subjects AS ss
+            ON ss.id = lt.subject_id
+          INNER JOIN semesters AS s
+            ON s.id = ss.semester_id
           LEFT JOIN topic_progress AS tp
-            ON lt.id = tp.topic_id
+            ON tp.topic_id = lt.id
             AND tp.user_id = ?
           WHERE lt.subject_id = ?
+            AND lt.status = 'published'
+            AND COALESCE(ss.is_placeholder, 0) = 0
+            AND s.is_active = 1
           ORDER BY lt.order_index ASC, lt.id ASC
         `,
         [userId, subjectId],
       );
 
       return res.json(rows);
+    } catch (err) {
+      console.error("GET learning topics error:", err);
+
+      return res.status(500).json({
+        error: "Failed to fetch topics.",
+      });
     }
-
-    const [rows] = await db.query(
-      `
-        SELECT
-          lt.*,
-          0 AS completed
-        FROM learn_topics AS lt
-        WHERE lt.subject_id = ?
-        ORDER BY lt.order_index ASC, lt.id ASC
-      `,
-      [subjectId],
-    );
-
-    res.json(rows);
-  } catch (err) {
-    console.error("GET /subjects/:subjectId/topics error:", err);
-
-    res.status(500).json({
-      error: "Failed to fetch topics",
-    });
-  }
-});
+  },
+);
 
 // GET single topic with subject execution/editor policy
 router.get("/topics/:topicId", async (req, res) => {
@@ -137,47 +155,80 @@ router.get("/topics/:topicId", async (req, res) => {
       });
     }
 
-    res.json(rows[0]);
+    return res.json(rows[0]);
   } catch (err) {
     console.error("GET /topics/:topicId error:", err);
 
-    res.status(500).json({
+    return res.status(500).json({
       error: "Failed to fetch topic",
     });
   }
 });
 
-// POST mark topic complete
-router.post("/topics/:topicId/complete", async (req, res) => {
-  try {
-    const { topicId } = req.params;
-    const { userId } = req.body;
+// POST mark a published topic complete for the authenticated user
+router.post(
+  "/topics/:topicId/complete",
+  requireAuth,
+  async (req, res) => {
+    const rawTopicId = req.params.topicId;
+    const topicId = Number(rawTopicId);
 
-    if (!userId) {
+    if (
+      !/^[1-9]\d*$/.test(rawTopicId) ||
+      !Number.isSafeInteger(topicId)
+    ) {
       return res.status(400).json({
-        error: "userId is required",
+        error: "Invalid topic ID.",
       });
     }
 
-    await db.query(
-      `
-        INSERT IGNORE INTO topic_progress (user_id, topic_id)
-        VALUES (?, ?)
-      `,
-      [userId, topicId],
-    );
+    try {
+      const [topics] = await db.execute(
+        `
+          SELECT lt.id
+          FROM learn_topics AS lt
+          INNER JOIN semester_subjects AS ss
+            ON ss.id = lt.subject_id
+          INNER JOIN semesters AS s
+            ON s.id = ss.semester_id
+          WHERE lt.id = ?
+            AND lt.status = 'published'
+            AND COALESCE(ss.is_placeholder, 0) = 0
+            AND s.is_active = 1
+          LIMIT 1
+        `,
+        [topicId],
+      );
 
-    res.json({
-      message: "Topic marked as complete",
-    });
-  } catch (err) {
-    console.error("POST /topics/:topicId/complete error:", err);
+      if (!topics.length) {
+        return res.status(404).json({
+          error: "Lesson not found or unavailable.",
+        });
+      }
 
-    res.status(500).json({
-      error: "Failed to mark topic complete",
-    });
-  }
-});
+      await db.execute(
+        `
+          INSERT INTO topic_progress (user_id, topic_id)
+          VALUES (?, ?)
+          ON DUPLICATE KEY UPDATE id = id
+        `,
+        [req.user.userId, topicId],
+      );
+
+      return res.json({
+        topic_id: topicId,
+        completed: true,
+        message: "Topic marked as complete.",
+      });
+    } catch (err) {
+      console.error("Complete learning topic error:", err);
+
+      return res.status(500).json({
+        error: "Failed to mark topic complete.",
+      });
+    }
+  },
+);
 
 // GET progress summary for a subject
 router.get("/subjects/:subjectId/progress", async (req, res) => {
@@ -213,14 +264,14 @@ router.get("/subjects/:subjectId/progress", async (req, res) => {
       [subjectId, userId],
     );
 
-    res.json({
+    return res.json({
       completed,
       total,
     });
   } catch (err) {
     console.error("GET /subjects/:subjectId/progress error:", err);
 
-    res.status(500).json({
+    return res.status(500).json({
       error: "Failed to fetch progress",
     });
   }
