@@ -16,6 +16,7 @@ import {
   LayoutDashboard,
   ClipboardList,
   ScrollText,
+  BookOpenCheck,
 } from "lucide-react";
 
 function readStoredUser() {
@@ -86,6 +87,11 @@ function Navbar() {
       to: "/admin/problems",
       label: "Manage Problems",
       icon: FilePenLine,
+    },
+    {
+      to: "/admin/learning",
+      label: "Learning Content",
+      icon: BookOpenCheck,
     },
     {
       to: "/admin/contests",

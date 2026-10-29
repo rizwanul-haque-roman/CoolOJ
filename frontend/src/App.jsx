@@ -19,12 +19,14 @@ import AdminContestControl from "./pages/AdminContestControl";
 import ContestLeaderboardPage from "./pages/ContestLeaderboardPage";
 import AdminProblems from "./pages/AdminProblems";
 import AdminAuditLogs from "./pages/AdminAuditLogs";
+import LearningContentManagement from "./pages/LearningContentManagement";
 
 function App() {
   const location = useLocation();
 
   const getPageTitle = () => {
     const path = location.pathname;
+
     if (path.startsWith("/profile") || path.startsWith("/users/")) return "Profile";
     if (/^\/contests\/[1-9]\d*\/leaderboard\/?$/.test(path)) return "Contest Leaderboard";
     if (path.startsWith("/admin/contests/")) return "Contest Control Center";
@@ -33,6 +35,7 @@ function App() {
     if (path.startsWith("/admin/submissions")) return "Submissions Control";
     if (path.startsWith("/admin/users")) return "User Control";
     if (path.startsWith("/admin/audit-logs")) return "Audit Logs";
+    if (path.startsWith("/admin/learning")) return "Learning Content Management";
     if (path.startsWith("/admin")) return "Admin Dashboard";
     if (path.startsWith("/login")) return "Login";
     if (path.startsWith("/register")) return "Register";
@@ -42,11 +45,14 @@ function App() {
     if (path.startsWith("/contests/")) return "Contest Details";
     if (path.startsWith("/contests")) return "Compete With Others to Judge Your Coding Skill";
     if (path.startsWith("/problems/")) return "Problem Details";
+    if (path.startsWith("/problems")) return "Problems";
+
     return "Problems";
   };
 
   const getPageSubtitle = () => {
     const path = location.pathname;
+
     if (path.startsWith("/profile") || path.startsWith("/users/")) return "Coding activity, solved problems, and contest performance";
     if (/^\/contests\/[1-9]\d*\/leaderboard\/?$/.test(path)) return "Follow solves, penalty time, and contest standings";
     if (path.startsWith("/admin/contests/")) return "Edit contest details, manage deadlines, and publish schedule changes";
@@ -55,6 +61,8 @@ function App() {
     if (path.startsWith("/admin/submissions")) return "Monitor code runs, verdicts, and results";
     if (path.startsWith("/admin/users")) return "Manage student and administrator accounts";
     if (path.startsWith("/admin/audit-logs")) return "View audit logs and track system activities";
+    if (path.startsWith("/admin/learning")) return "Manage lessons, topics, and learning content";
+    if (path.startsWith("/admin")) return "Admin Dashboard";
     if (path.startsWith("/login")) return "Access your futuristic coding workspace";
     if (path.startsWith("/register")) return "Create your account and start solving";
     if (path.startsWith("/submissions")) return "Track code runs, verdicts, and results";
@@ -63,6 +71,8 @@ function App() {
     if (path.startsWith("/contests/")) return "View the contest schedule and assigned problems";
     if (path.startsWith("/contests")) return "Explore upcoming, live, and completed contests";
     if (path.startsWith("/problems/")) return "Read the statement and submit your solution";
+    if (path.startsWith("/problems")) return "Browse challenges and sharpen your problem solving";
+
     return "Browse challenges and sharpen your problem solving";
   };
 
@@ -94,17 +104,17 @@ function App() {
           <Route path="/problems" element={<Problems />} />
           <Route path="/contests" element={<Contests />} />
           <Route path="/contests/:id" element={<ContestDetails />} />
-
           <Route path="/contests/:id/leaderboard" element={<ContestLeaderboardPage />} />
           <Route path="/admin" element={<AdminDashboard />} />
           <Route path="/admin/dashboard" element={<AdminDashboard />} />
           <Route path="/admin/problems" element={<AdminProblems />} />
+          <Route path="/admin/learning" element={<LearningContentManagement />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/users/:id" element={<Profile />} />
           <Route path="/admin/contests" element={<AdminContests />} />
           <Route path="/admin/contests/:id" element={<AdminContestControl />} />
           <Route path="/problems/:id" element={<ProblemDetails />} />
-          <Route path="/submissions/:submissionId" element={<SubmissionDetails />}/>
+          <Route path="/submissions/:submissionId" element={<SubmissionDetails />} />
           <Route path="/submissions" element={<Submissions />} />
           <Route path="/admin/submissions" element={<AdminSubmissions />} />
           <Route path="/admin/audit-logs" element={<AdminAuditLogs />} />

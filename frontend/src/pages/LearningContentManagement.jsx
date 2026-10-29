@@ -1,0 +1,1029 @@
+import { useEffect, useRef, useState } from "react";
+import {
+  ArrowDown,
+  ArrowUp,
+  BookOpen,
+  ChevronRight,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
+import api from "../api/axios";
+import LessonEditor from "../components/LessonEditor";
+
+const panel =
+  "rounded-3xl border border-white/10 bg-slate-900/50 p-5 shadow-2xl sm:p-6";
+
+const input =
+  "w-full rounded-xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-400/50";
+
+const button =
+  "inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-40";
+
+const neutral =
+  `${button} border-white/10 bg-white/5 text-slate-300 hover:bg-white/10`;
+
+const primary =
+  `${button} border-cyan-400/20 bg-cyan-400/10 text-cyan-200 hover:bg-cyan-400/20`;
+
+const danger =
+  `${button} border-rose-400/20 bg-rose-400/10 text-rose-200 hover:bg-rose-400/20`;
+
+const badges = {
+  published:
+    "border-emerald-400/20 bg-emerald-400/10 text-emerald-200",
+  draft: "border-amber-400/20 bg-amber-400/10 text-amber-200",
+  archived: "border-slate-400/20 bg-slate-400/10 text-slate-300",
+};
+
+const emptyCourse = {
+  name: "",
+  description: "",
+  language: "",
+  is_placeholder: false,
+  execution_mode: "disabled",
+  default_language: "",
+  editor_enabled: false,
+  run_enabled: false,
+  editor_message: "",
+};
+
+function message(error) {
+  return (
+    error.response?.data?.error ||
+    error.message ||
+    "Unable to complete the request."
+  );
+}
+
+function semesterLabel(number) {
+  const semester = Number(number);
+  const year = Math.ceil(semester / 2);
+  const yearLabels = {
+    1: "1st",
+    2: "2nd",
+    3: "3rd",
+    4: "4th",
+  };
+
+  return `${yearLabels[year] || `${year}th`} year - Semester ${semester}`;
+}
+
+export default function LearningContentManagement() {
+  const [semesters, setSemesters] = useState([]);
+  const [courses, setCourses] = useState([]);
+  const [lessons, setLessons] = useState([]);
+
+  const [semesterId, setSemesterId] = useState("");
+  const [courseId, setCourseId] = useState("");
+
+  const [loading, setLoading] = useState(true);
+  const [lessonsLoading, setLessonsLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const [error, setError] = useState("");
+  const [lessonError, setLessonError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const [refresh, setRefresh] = useState(0);
+  const [lessonRefresh, setLessonRefresh] = useState(0);
+
+  const [courseForm, setCourseForm] = useState(null);
+  const [courseFormError, setCourseFormError] = useState("");
+  const [lessonEditor, setLessonEditor] = useState(null);
+
+  const actionLock = useRef(false);
+
+  const selectedSemester = semesters.find(
+    (item) => String(item.id) === semesterId,
+  );
+
+  const selectedCourse = courses.find(
+    (item) =>
+      String(item.id) === courseId &&
+      String(item.semester_id) === semesterId,
+  );
+
+  const visibleCourses = courses.filter(
+    (item) => String(item.semester_id) === semesterId,
+  );
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadStructure() {
+      setLoading(true);
+      setError("");
+
+      try {
+        const [semesterResponse, courseResponse] = await Promise.all([
+          api.get("/admin/learning/semesters", {
+            signal: controller.signal,
+          }),
+          api.get("/admin/learning/subjects", {
+            signal: controller.signal,
+          }),
+        ]);
+
+        const nextSemesters = semesterResponse.data?.semesters;
+        const nextCourses = courseResponse.data;
+
+        if (
+          !Array.isArray(nextSemesters) ||
+          !Array.isArray(nextCourses)
+        ) {
+          throw new Error("Unexpected learning structure response.");
+        }
+
+        if (controller.signal.aborted) return;
+
+        setSemesters(nextSemesters);
+        setCourses(nextCourses);
+
+        setSemesterId((current) =>
+          nextSemesters.some((item) => String(item.id) === current)
+            ? current
+            : String(nextSemesters[0]?.id || ""),
+        );
+
+        setCourseId((current) =>
+          nextCourses.some((item) => String(item.id) === current)
+            ? current
+            : "",
+        );
+      } catch (requestError) {
+        if (!controller.signal.aborted) {
+          setError(message(requestError));
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadStructure();
+
+    return () => controller.abort();
+  }, [refresh]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    setLessons([]);
+    setLessonError("");
+
+    if (!courseId) {
+      setLessonsLoading(false);
+      return () => controller.abort();
+    }
+
+    async function loadLessons() {
+      setLessonsLoading(true);
+
+      try {
+        const response = await api.get(
+          `/admin/learning/subjects/${courseId}/topics`,
+          { signal: controller.signal },
+        );
+
+        if (!Array.isArray(response.data)) {
+          throw new Error("Unexpected lesson-list response.");
+        }
+
+        if (!controller.signal.aborted) {
+          setLessons(response.data);
+        }
+      } catch (requestError) {
+        if (!controller.signal.aborted) {
+          setLessonError(message(requestError));
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setLessonsLoading(false);
+        }
+      }
+    }
+
+    void loadLessons();
+
+    return () => controller.abort();
+  }, [courseId, lessonRefresh]);
+
+  function refreshWorkspace() {
+    setRefresh((value) => value + 1);
+    setLessonRefresh((value) => value + 1);
+  }
+
+  async function runAction(callback) {
+    if (actionLock.current) return;
+
+    actionLock.current = true;
+    setBusy(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      await callback();
+    } catch (requestError) {
+      setError(message(requestError));
+    } finally {
+      actionLock.current = false;
+      setBusy(false);
+    }
+  }
+
+  function selectSemester(value) {
+    setSemesterId(value);
+    setCourseId("");
+    setLessons([]);
+    setSuccess("");
+    setError("");
+  }
+
+  function openCourseForm(course = null) {
+    setCourseFormError("");
+
+    setCourseForm({
+      id: course?.id || null,
+      values: course
+        ? {
+            name: course.name || "",
+            description: course.description || "",
+            language: course.language || "",
+            is_placeholder: Boolean(course.is_placeholder),
+            execution_mode: course.execution_mode || "disabled",
+            default_language: course.default_language || "",
+            editor_enabled: Boolean(course.editor_enabled),
+            run_enabled: Boolean(course.run_enabled),
+            editor_message: course.editor_message || "",
+          }
+        : { ...emptyCourse },
+    });
+  }
+
+  function updateCourseField(event) {
+    const { name, value, type, checked } = event.target;
+
+    setCourseForm((current) => {
+      const values = {
+        ...current.values,
+        [name]: type === "checkbox" ? checked : value,
+      };
+
+      if (
+        (name === "editor_enabled" && !checked) ||
+        (name === "execution_mode" && value === "disabled")
+      ) {
+        values.run_enabled = false;
+      }
+
+      return { ...current, values };
+    });
+  }
+
+  async function saveCourse(event) {
+    event.preventDefault();
+
+    if (actionLock.current) return;
+
+    actionLock.current = true;
+    setBusy(true);
+    setCourseFormError("");
+
+    try {
+      const values = courseForm.values;
+
+      const payload = {
+        ...values,
+        name: values.name.trim(),
+        language: values.language.trim() || null,
+        default_language: values.default_language.trim() || null,
+        editor_message: values.editor_message.trim() || null,
+      };
+
+      const response = courseForm.id
+        ? await api.patch(
+            `/admin/learning/subjects/${courseForm.id}`,
+            payload,
+          )
+        : await api.post("/admin/learning/subjects", {
+            ...payload,
+            semester_id: Number(semesterId),
+          });
+
+      setCourseForm(null);
+      setSuccess(response.data.message);
+      refreshWorkspace();
+    } catch (requestError) {
+      setCourseFormError(message(requestError));
+    } finally {
+      actionLock.current = false;
+      setBusy(false);
+    }
+  }
+
+  function deleteCourse(course) {
+    if (
+      !window.confirm(
+        `Delete course "${course.name}"?\n\nOnly empty courses can be deleted. Archived lessons also prevent deletion.`,
+      )
+    ) {
+      return;
+    }
+
+    void runAction(async () => {
+      const response = await api.delete(
+        `/admin/learning/subjects/${course.id}`,
+        { data: { confirm: true } },
+      );
+
+      if (String(course.id) === courseId) {
+        setCourseId("");
+      }
+
+      setSuccess(response.data.message);
+      refreshWorkspace();
+    });
+  }
+
+  function changeStatus(topic, status) {
+    if (
+      status === "archived" &&
+      !window.confirm(
+        `Archive "${topic.title}"?\n\nIts content and student progress will be retained.`,
+      )
+    ) {
+      return;
+    }
+
+    void runAction(async () => {
+      const response = await api.patch(
+        `/admin/learning/topics/${topic.id}/status`,
+        { status },
+      );
+
+      setSuccess(response.data.message);
+      refreshWorkspace();
+    });
+  }
+
+  function deleteLesson(topic) {
+    const reason = window.prompt(
+      `Permanently delete "${topic.title}"?\n\nThis removes the lesson and all its student progress. This cannot be undone through the app.\n\nEnter a reason, or leave it empty. Press Cancel to stop.`,
+    );
+
+    if (reason === null) return;
+
+    if (
+      !window.confirm(
+        `Final confirmation: permanently delete "${topic.title}" and its student progress?`,
+      )
+    ) {
+      return;
+    }
+
+    void runAction(async () => {
+      const response = await api.delete(
+        `/admin/learning/topics/${topic.id}`,
+        {
+          data: {
+            confirm: true,
+            reason: reason.trim() || undefined,
+          },
+        },
+      );
+
+      setSuccess(response.data.message);
+      refreshWorkspace();
+    });
+  }
+
+  function moveLesson(index, direction) {
+    const nextIndex = index + direction;
+
+    if (nextIndex < 0 || nextIndex >= lessons.length) return;
+
+    const reordered = [...lessons];
+
+    [reordered[index], reordered[nextIndex]] = [
+      reordered[nextIndex],
+      reordered[index],
+    ];
+
+    void runAction(async () => {
+      const response = await api.put(
+        `/admin/learning/subjects/${courseId}/topic-order`,
+        { topic_ids: reordered.map((item) => Number(item.id)) },
+      );
+
+      setSuccess(response.data.message);
+      setLessonRefresh((value) => value + 1);
+    });
+  }
+
+  // While the lesson editor is open, hide parent selection controls.
+  // Its Cancel button handles confirmation of unsaved changes.
+  if (lessonEditor) {
+    return (
+      <LessonEditor
+        key={`${lessonEditor.subject.id}:${lessonEditor.topicId || "new"}`}
+        subject={lessonEditor.subject}
+        topicId={lessonEditor.topicId}
+        onCancel={() => setLessonEditor(null)}
+        onSaved={() => {
+          setLessonEditor(null);
+          setSuccess(
+            lessonEditor.topicId
+              ? "Lesson changes saved."
+              : "Draft lesson created.",
+          );
+          refreshWorkspace();
+        }}
+      />
+    );
+  }
+
+  const disabled = busy || loading || courseForm !== null;
+
+  return (
+    <div className="space-y-6">
+      {error && (
+        <div
+          role="alert"
+          className="rounded-2xl border border-rose-400/20 bg-rose-400/10 p-4 text-sm text-rose-200"
+        >
+          {error}
+        </div>
+      )}
+
+      {success && (
+        <div
+          role="status"
+          className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm text-emerald-200"
+        >
+          {success}
+        </div>
+      )}
+
+      <section className={panel}>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-bold text-white">
+              Learning workspace
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-400">
+              Choose a semester, manage its courses, then create and
+              edit lessons inside a course.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={refreshWorkspace}
+            className={neutral}
+          >
+            <RefreshCw
+              size={15}
+              className={loading ? "animate-spin" : ""}
+            />
+            Refresh
+          </button>
+        </div>
+
+        <label
+          htmlFor="learning-semester"
+          className="mb-2 mt-6 block text-xs font-semibold uppercase tracking-wider text-slate-500"
+        >
+          Semester
+        </label>
+
+        <select
+          id="learning-semester"
+          value={semesterId}
+          disabled={disabled}
+          onChange={(event) => selectSemester(event.target.value)}
+          className={`${input} max-w-xl`}
+        >
+          <option value="">
+            {loading ? "Loading semesters..." : "Select a semester"}
+          </option>
+
+          {semesters.map((semester) => (
+            <option key={semester.id} value={semester.id}>
+                {semesterLabel(semester.number)}
+                {!semester.is_active ? " (Inactive)" : ""}
+            </option>
+            ))}
+        </select>
+      </section>
+
+      {courseForm && (
+        <section className={panel}>
+          <h2 className="text-xl font-bold text-white">
+            {courseForm.id ? "Edit course" : "Add course"}
+          </h2>
+
+          <p className="mt-2 text-sm text-slate-400">
+            Semester {selectedSemester?.number}
+          </p>
+
+          <form onSubmit={saveCourse} className="mt-5">
+            <fieldset disabled={busy} className="space-y-4">
+              <label className="block text-sm text-slate-300">
+                Course name
+                <input
+                  required
+                  name="name"
+                  value={courseForm.values.name}
+                  onChange={updateCourseField}
+                  className={`${input} mt-2`}
+                />
+              </label>
+
+              <label className="block text-sm text-slate-300">
+                Description
+                <textarea
+                  name="description"
+                  value={courseForm.values.description}
+                  onChange={updateCourseField}
+                  rows={3}
+                  className={`${input} mt-2`}
+                />
+              </label>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="block text-sm text-slate-300">
+                  Course language label
+                  <input
+                    name="language"
+                    value={courseForm.values.language}
+                    onChange={updateCourseField}
+                    placeholder="For example: C"
+                    className={`${input} mt-2`}
+                  />
+                </label>
+
+                <label className="block text-sm text-slate-300">
+                  Execution mode
+                  <select
+                    name="execution_mode"
+                    value={courseForm.values.execution_mode}
+                    onChange={updateCourseField}
+                    className={`${input} mt-2`}
+                  >
+                    <option value="disabled">Disabled</option>
+                    <option value="code">Code</option>
+                    <option value="sql">SQL</option>
+                    <option value="external">External</option>
+                  </select>
+                </label>
+
+                <label className="block text-sm text-slate-300">
+                  Default editor language
+                  <input
+                    name="default_language"
+                    value={courseForm.values.default_language}
+                    onChange={updateCourseField}
+                    placeholder="c, cpp, python, or java"
+                    className={`${input} mt-2`}
+                  />
+                </label>
+
+                <label className="block text-sm text-slate-300">
+                  Editor message
+                  <input
+                    name="editor_message"
+                    value={courseForm.values.editor_message}
+                    onChange={updateCourseField}
+                    className={`${input} mt-2`}
+                  />
+                </label>
+              </div>
+
+              <div className="flex flex-wrap gap-5 rounded-xl border border-white/10 bg-slate-950/30 p-4">
+                {[
+                  ["is_placeholder", "Placeholder course"],
+                  ["editor_enabled", "Enable practice editor"],
+                  ["run_enabled", "Enable Run"],
+                ].map(([name, label]) => (
+                  <label
+                    key={name}
+                    className="flex items-center gap-2 text-sm text-slate-300"
+                  >
+                    <input
+                      type="checkbox"
+                      name={name}
+                      checked={courseForm.values[name]}
+                      onChange={updateCourseField}
+                      disabled={
+                        busy ||
+                        (name === "run_enabled" &&
+                          (!courseForm.values.editor_enabled ||
+                            courseForm.values.execution_mode ===
+                              "disabled"))
+                      }
+                      className="accent-cyan-400"
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+
+              <p className="text-xs leading-6 text-slate-500">
+                Execution settings configure the course; they do not
+                add support for a new runner. Keep Run disabled for
+                tools your backend does not support.
+              </p>
+
+              {courseFormError && (
+                <p role="alert" className="text-sm text-rose-300">
+                  {courseFormError}
+                </p>
+              )}
+
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        "Close the course form and discard unsaved changes?",
+                      )
+                    ) {
+                      setCourseForm(null);
+                    }
+                  }}
+                  className={neutral}
+                >
+                  Cancel
+                </button>
+
+                <button type="submit" className={primary}>
+                  {busy ? "Saving..." : "Save course"}
+                </button>
+              </div>
+            </fieldset>
+          </form>
+        </section>
+      )}
+
+      {semesterId && (
+        <section className={panel}>
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-bold text-white">
+                Courses
+              </h2>
+              <p className="mt-1 text-sm text-slate-400">
+                Semester {selectedSemester?.number} ·{" "}
+                {visibleCourses.length} courses
+              </p>
+            </div>
+
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => openCourseForm()}
+              className={primary}
+            >
+              <Plus size={15} />
+              Add course
+            </button>
+          </div>
+
+          {loading ? (
+            <p role="status" className="py-8 text-sm text-slate-400">
+              Loading courses...
+            </p>
+          ) : visibleCourses.length === 0 ? (
+            <p className="mt-5 rounded-2xl border border-dashed border-white/10 p-8 text-center text-sm text-slate-500">
+              No courses in this semester. Add the first course.
+            </p>
+          ) : (
+            <div className="mt-5 grid gap-4 xl:grid-cols-2">
+              {visibleCourses.map((course) => {
+                const active = String(course.id) === courseId;
+
+                return (
+                  <article
+                    key={course.id}
+                    className={`rounded-2xl border p-5 ${
+                      active
+                        ? "border-cyan-400/40 bg-cyan-400/5"
+                        : "border-white/10 bg-slate-950/30"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <BookOpen
+                        size={20}
+                        className="mt-1 shrink-0 text-cyan-300"
+                      />
+
+                      <div className="min-w-0 flex-1">
+                        <h3 className="font-semibold text-white">
+                          {course.name}
+                        </h3>
+
+                        {course.description && (
+                          <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-400">
+                            {course.description}
+                          </p>
+                        )}
+
+                        <p className="mt-3 text-xs leading-6 text-slate-500">
+                          {course.lesson_count} lessons ·{" "}
+                          {course.published_count} published ·{" "}
+                          {course.draft_count} drafts ·{" "}
+                          {course.archived_count || 0} archived
+                        </p>
+
+                        {course.is_placeholder && (
+                          <p className="mt-1 text-xs text-amber-300">
+                            Placeholder course
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-5 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => {
+                          setCourseId(String(course.id));
+                          setSuccess("");
+                        }}
+                        className={primary}
+                      >
+                        {active ? "Selected" : "Manage lessons"}
+                        <ChevronRight size={14} />
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => openCourseForm(course)}
+                        className={neutral}
+                      >
+                        <Pencil size={14} />
+                        Edit
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={
+                          disabled || Number(course.lesson_count) > 0
+                        }
+                        title={
+                          Number(course.lesson_count) > 0
+                            ? "Remove all lessons before deleting this course."
+                            : "Delete empty course"
+                        }
+                        onClick={() => deleteCourse(course)}
+                        className={danger}
+                      >
+                        <Trash2 size={14} />
+                        Remove
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
+
+      {selectedCourse && (
+        <section className={panel}>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-cyan-300">
+                Selected course
+              </p>
+
+              <h2 className="mt-2 text-xl font-bold text-white">
+                {selectedCourse.name}
+              </h2>
+
+              <p className="mt-2 text-sm text-slate-400">
+                Add lessons, edit their content, and manage the
+                learning order.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              disabled={disabled || lessonsLoading}
+              onClick={() =>
+                setLessonEditor({
+                  subject: selectedCourse,
+                  topicId: null,
+                })
+              }
+              className={primary}
+            >
+              <Plus size={15} />
+              Add lesson
+            </button>
+          </div>
+
+          {lessonError && (
+            <p
+              role="alert"
+              className="mt-5 text-sm text-rose-300"
+            >
+              {lessonError}
+            </p>
+          )}
+
+          {lessonsLoading ? (
+            <p role="status" className="py-8 text-sm text-slate-400">
+              Loading lessons...
+            </p>
+          ) : lessonError ? (
+            <button
+              type="button"
+              onClick={() =>
+                setLessonRefresh((value) => value + 1)
+              }
+              className={`${neutral} mt-4`}
+            >
+              Retry loading lessons
+            </button>
+          ) : lessons.length === 0 ? (
+            <p className="mt-5 rounded-2xl border border-dashed border-white/10 p-8 text-center text-sm text-slate-500">
+              This course has no lessons yet. Add its first lesson.
+            </p>
+          ) : (
+            <div className="mt-6 overflow-x-auto rounded-2xl border border-white/10">
+              <table className="w-full min-w-[900px] text-left text-sm">
+                <thead className="bg-slate-950/50 text-xs uppercase tracking-wider text-slate-500">
+                  <tr>
+                    <th scope="col" className="px-5 py-4">
+                      Order
+                    </th>
+                    <th scope="col" className="px-5 py-4">
+                      Lesson
+                    </th>
+                    <th scope="col" className="px-5 py-4">
+                      Status
+                    </th>
+                    <th
+                      scope="col"
+                      className="px-5 py-4 text-right"
+                    >
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {lessons.map((topic, index) => (
+                    <tr
+                      key={topic.id}
+                      className="border-t border-white/5 hover:bg-white/[0.025]"
+                    >
+                      <td className="px-5 py-4">
+                        <div className="flex items-center gap-1">
+                          <span className="mr-2 min-w-5 font-mono text-slate-500">
+                            {index + 1}
+                          </span>
+
+                          <button
+                            type="button"
+                            disabled={disabled || index === 0}
+                            aria-label={`Move ${topic.title} up`}
+                            onClick={() => moveLesson(index, -1)}
+                            className={`${neutral} p-2`}
+                          >
+                            <ArrowUp size={13} />
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={
+                              disabled ||
+                              index === lessons.length - 1
+                            }
+                            aria-label={`Move ${topic.title} down`}
+                            onClick={() => moveLesson(index, 1)}
+                            className={`${neutral} p-2`}
+                          >
+                            <ArrowDown size={13} />
+                          </button>
+                        </div>
+                      </td>
+
+                      <td className="px-5 py-4">
+                        <p className="font-semibold text-white">
+                          {topic.title}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Lesson #{topic.id}
+                        </p>
+                      </td>
+
+                      <td className="px-5 py-4">
+                        <span
+                          className={`rounded-full border px-3 py-1 text-xs capitalize ${
+                            badges[topic.status] || badges.draft
+                          }`}
+                        >
+                          {topic.status}
+                        </span>
+                      </td>
+
+                      <td className="px-5 py-4">
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            disabled={disabled}
+                            onClick={() =>
+                              setLessonEditor({
+                                subject: selectedCourse,
+                                topicId: topic.id,
+                              })
+                            }
+                            className={primary}
+                          >
+                            <Pencil size={13} />
+                            Edit
+                          </button>
+
+                          {topic.status === "archived" ? (
+                            <>
+                              <button
+                                type="button"
+                                disabled={disabled}
+                                onClick={() =>
+                                  changeStatus(topic, "draft")
+                                }
+                                className={neutral}
+                              >
+                                Restore
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={disabled}
+                                onClick={() => deleteLesson(topic)}
+                                className={danger}
+                              >
+                                Delete
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                disabled={disabled}
+                                onClick={() =>
+                                  changeStatus(
+                                    topic,
+                                    topic.status === "published"
+                                      ? "draft"
+                                      : "published",
+                                  )
+                                }
+                                className={neutral}
+                              >
+                                {topic.status === "published"
+                                  ? "Unpublish"
+                                  : "Publish"}
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={disabled}
+                                onClick={() =>
+                                  changeStatus(topic, "archived")
+                                }
+                                className={neutral}
+                              >
+                                Archive
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <p className="mt-4 text-xs leading-6 text-slate-500">
+            Reordering changes the learning sequence. Archived
+            lessons remain listed for administration. Restore an
+            archived lesson to draft before publishing it again.
+          </p>
+        </section>
+      )}
+    </div>
+  );
+}

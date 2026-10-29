@@ -3,23 +3,189 @@ const router = express.Router();
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
 
-// GET all semesters
+function optionalLearningAuth(req, res, next) {
+  if (req.headers.authorization !== undefined) {
+    return requireAuth(req, res, next);
+  }
+
+  return next();
+}
+
+async function requireUnlockedTopic(req, res, next) {
+  const rawTopicId = req.params.topicId;
+  const topicId = Number(rawTopicId);
+
+  if (
+    !/^[1-9]\d*$/.test(rawTopicId) ||
+    !Number.isSafeInteger(topicId)
+  ) {
+    return res.status(400).json({
+      error: "Invalid topic ID.",
+    });
+  }
+
+  try {
+    const [rows] = await db.execute(
+      `
+        SELECT
+          lt.id,
+          lt.subject_id,
+          lt.order_index,
+          lt.title,
+          lt.content,
+          lt.starter_code,
+
+          ss.name AS subject_name,
+          ss.language AS subject_language,
+          ss.execution_mode,
+          ss.default_language,
+          ss.editor_enabled,
+          ss.run_enabled,
+          ss.editor_message
+
+        FROM learn_topics AS lt
+        INNER JOIN semester_subjects AS ss
+          ON ss.id = lt.subject_id
+        INNER JOIN semesters AS s
+          ON s.id = ss.semester_id
+
+        WHERE lt.id = ?
+          AND lt.status = 'published'
+          AND COALESCE(ss.is_placeholder, 0) = 0
+          AND s.is_active = 1
+
+        LIMIT 1
+      `,
+      [topicId],
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({
+        error: "Lesson not found or unavailable.",
+      });
+    }
+
+    const topic = rows[0];
+    const userId = req.user?.userId ?? null;
+
+    const [missingPrerequisites] = await db.execute(
+      `
+        SELECT
+          previous.id,
+          previous.title
+        FROM learn_topics AS previous
+
+        WHERE previous.subject_id = ?
+          AND previous.status = 'published'
+          AND (
+            previous.order_index < ?
+            OR (
+              previous.order_index = ?
+              AND previous.id < ?
+            )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM topic_progress AS progress
+            WHERE progress.topic_id = previous.id
+              AND progress.user_id = ?
+          )
+
+        ORDER BY previous.order_index ASC, previous.id ASC
+        LIMIT 1
+      `,
+      [
+        topic.subject_id,
+        topic.order_index,
+        topic.order_index,
+        topic.id,
+        userId,
+      ],
+    );
+
+    if (missingPrerequisites.length) {
+      const prerequisite = missingPrerequisites[0];
+
+      return res.status(userId === null ? 401 : 403).json({
+        error:
+          userId === null
+            ? "Please log in and complete earlier lessons first."
+            : `Complete "${prerequisite.title}" before opening this lesson.`,
+        code: "LESSON_LOCKED",
+        prerequisite_topic_id: prerequisite.id,
+      });
+    }
+
+    req.learningTopic = topic;
+
+    return next();
+  } catch (err) {
+    console.error("Learning prerequisite check error:", err);
+
+    return res.status(500).json({
+      error: "Unable to check lesson access.",
+    });
+  }
+}
+
+// GET all semesters with their assigned course names.
+// Course names include placeholders so the semester roadmap
+// can show planned courses without exposing lesson content.
 router.get("/semesters", async (req, res) => {
   try {
-    const [rows] = await db.query(
+    const [semesters] = await db.execute(
       `
-        SELECT *
+        SELECT
+          id,
+          number,
+          title,
+          description,
+          is_active
         FROM semesters
-        ORDER BY number ASC
+        ORDER BY number ASC, id ASC
       `,
     );
 
-    return res.json(rows);
+    const [courses] = await db.execute(
+      `
+        SELECT
+          id,
+          semester_id,
+          name
+        FROM semester_subjects
+        ORDER BY semester_id ASC, id ASC
+      `,
+    );
+
+    const coursesBySemester = new Map();
+
+    for (const course of courses) {
+      const semesterId = Number(course.semester_id);
+
+      if (!coursesBySemester.has(semesterId)) {
+        coursesBySemester.set(semesterId, []);
+      }
+
+      coursesBySemester.get(semesterId).push(course.name);
+    }
+
+    return res.json(
+      semesters.map((semester) => {
+        const courseNames =
+          coursesBySemester.get(Number(semester.id)) || [];
+
+        return {
+          ...semester,
+          course_names: courseNames,
+          course_count: courseNames.length,
+        };
+      }),
+    );
   } catch (err) {
     console.error("GET /semesters error:", err);
 
     return res.status(500).json({
-      error: "Failed to fetch semesters",
+      error: "Failed to fetch semesters.",
     });
   }
 });
@@ -49,17 +215,10 @@ router.get("/semesters/:semesterId/subjects", async (req, res) => {
   }
 });
 
-// Public lesson list, with personal progress for authenticated requests.
+// Public lesson list, with personal progress for authenticated requests
 router.get(
   "/subjects/:subjectId/topics",
-  (req, res, next) => {
-    // Guests may browse. If credentials are supplied, validate them.
-    if (req.headers.authorization !== undefined) {
-      return requireAuth(req, res, next);
-    }
-
-    return next();
-  },
+  optionalLearningAuth,
   async (req, res) => {
     const rawSubjectId = req.params.subjectId;
     const subjectId = Number(rawSubjectId);
@@ -73,7 +232,6 @@ router.get(
       });
     }
 
-    // Never use a userId supplied in query parameters.
     const userId = req.user?.userId ?? null;
 
     try {
@@ -88,6 +246,7 @@ router.get(
               WHEN tp.id IS NOT NULL THEN 1
               ELSE 0
             END AS completed
+
           FROM learn_topics AS lt
           INNER JOIN semester_subjects AS ss
             ON ss.id = lt.subject_id
@@ -96,10 +255,12 @@ router.get(
           LEFT JOIN topic_progress AS tp
             ON tp.topic_id = lt.id
             AND tp.user_id = ?
+
           WHERE lt.subject_id = ?
             AND lt.status = 'published'
             AND COALESCE(ss.is_placeholder, 0) = 0
             AND s.is_active = 1
+
           ORDER BY lt.order_index ASC, lt.id ASC
         `,
         [userId, subjectId],
@@ -116,96 +277,25 @@ router.get(
   },
 );
 
-// GET single topic with subject execution/editor policy
-router.get("/topics/:topicId", async (req, res) => {
-  try {
-    const { topicId } = req.params;
+// GET a published lesson after checking prerequisites
+router.get(
+  "/topics/:topicId",
+  optionalLearningAuth,
+  requireUnlockedTopic,
+  (req, res) => {
+    return res.json(req.learningTopic);
+  },
+);
 
-    const [rows] = await db.query(
-      `
-        SELECT
-          lt.id,
-          lt.subject_id,
-          lt.order_index,
-          lt.title,
-          lt.content,
-          lt.starter_code,
-
-          ss.name AS subject_name,
-          ss.language AS subject_language,
-          ss.execution_mode,
-          ss.default_language,
-          ss.editor_enabled,
-          ss.run_enabled,
-          ss.editor_message
-
-        FROM learn_topics AS lt
-        INNER JOIN semester_subjects AS ss
-          ON ss.id = lt.subject_id
-
-        WHERE lt.id = ?
-        LIMIT 1
-      `,
-      [topicId],
-    );
-
-    if (rows.length === 0) {
-      return res.status(404).json({
-        error: "Topic not found",
-      });
-    }
-
-    return res.json(rows[0]);
-  } catch (err) {
-    console.error("GET /topics/:topicId error:", err);
-
-    return res.status(500).json({
-      error: "Failed to fetch topic",
-    });
-  }
-});
-
-// POST mark a published topic complete for the authenticated user
+// POST mark an unlocked lesson complete for the authenticated user
 router.post(
   "/topics/:topicId/complete",
   requireAuth,
+  requireUnlockedTopic,
   async (req, res) => {
-    const rawTopicId = req.params.topicId;
-    const topicId = Number(rawTopicId);
-
-    if (
-      !/^[1-9]\d*$/.test(rawTopicId) ||
-      !Number.isSafeInteger(topicId)
-    ) {
-      return res.status(400).json({
-        error: "Invalid topic ID.",
-      });
-    }
+    const topicId = req.learningTopic.id;
 
     try {
-      const [topics] = await db.execute(
-        `
-          SELECT lt.id
-          FROM learn_topics AS lt
-          INNER JOIN semester_subjects AS ss
-            ON ss.id = lt.subject_id
-          INNER JOIN semesters AS s
-            ON s.id = ss.semester_id
-          WHERE lt.id = ?
-            AND lt.status = 'published'
-            AND COALESCE(ss.is_placeholder, 0) = 0
-            AND s.is_active = 1
-          LIMIT 1
-        `,
-        [topicId],
-      );
-
-      if (!topics.length) {
-        return res.status(404).json({
-          error: "Lesson not found or unavailable.",
-        });
-      }
-
       await db.execute(
         `
           INSERT INTO topic_progress (user_id, topic_id)

@@ -14,7 +14,7 @@ const initialFilters = {
   from: "",
   to: "",
   sort: "newest",
-  page_size: "25",
+  page_size: "10",
 };
 
 
@@ -112,7 +112,7 @@ export default function AdminAuditLogs() {
   const [draft, setDraft] = useState({ ...initialFilters });
   const [query, setQuery] = useState({
     page: "1",
-    page_size: "25",
+    page_size: "10",
     sort: "newest",
   });
   const [data, setData] = useState(null);

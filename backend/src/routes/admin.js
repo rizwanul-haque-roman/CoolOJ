@@ -7,8 +7,8 @@ const { writeAuditLog, diffChanges } = require("../utils/auditLog");
 
 
 router.use(requireAuth, requireAdmin);
+router.use(require("./adminLearning"));
 router.use(require("./adminContestControls"));
-
 
 const VALID_ROLES = ["student", "admin"];
 const VALID_STATUSES = ["active", "suspended", "deleted"];
@@ -1748,5 +1748,198 @@ router.get("/audit-logs/:id", async (req, res) => {
   }
 });
 
+
+// POST create a draft lesson at the end of a course.
+router.post("/learning/topics", async (req, res) => {
+  const body = req.body;
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return res.status(400).json({
+      error: "A JSON object is required.",
+    });
+  }
+
+  const allowedFields = new Set([
+    "subject_id",
+    "title",
+    "content",
+    "starter_code",
+  ]);
+
+  if (Object.keys(body).some((key) => !allowedFields.has(key))) {
+    return res.status(400).json({
+      error: "Unsupported lesson fields.",
+    });
+  }
+
+  const subjectId = body.subject_id;
+
+  if (
+    !Number.isSafeInteger(subjectId) ||
+    subjectId <= 0 ||
+    subjectId > 2147483647
+  ) {
+    return res.status(400).json({
+      error: "subject_id must be a positive integer.",
+    });
+  }
+
+  if (
+    typeof body.title !== "string" ||
+    !body.title.trim() ||
+    Array.from(body.title.trim()).length > 255
+  ) {
+    return res.status(400).json({
+      error: "Title must contain between 1 and 255 characters.",
+    });
+  }
+
+  const title = body.title.trim();
+  const content = body.content ?? "";
+  const starterCode = body.starter_code ?? "";
+
+  if (
+    typeof content !== "string" ||
+    Buffer.byteLength(content, "utf8") > 32 * 1024
+  ) {
+    return res.status(400).json({
+      error: "Lesson content must be text of at most 32 KB.",
+    });
+  }
+
+  if (
+    typeof starterCode !== "string" ||
+    Buffer.byteLength(starterCode, "utf8") > 16 * 1024
+  ) {
+    return res.status(400).json({
+      error: "Starter code must be text of at most 16 KB.",
+    });
+  }
+
+  let connection;
+  let transactionStarted = false;
+
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+    transactionStarted = true;
+
+    // Serialize lesson creation within this course.
+    const [subjects] = await connection.execute(
+      `
+        SELECT id, name
+        FROM semester_subjects
+        WHERE id = ?
+        FOR UPDATE
+      `,
+      [subjectId],
+    );
+
+    if (!subjects.length) {
+      await connection.rollback();
+      transactionStarted = false;
+
+      return res.status(404).json({
+        error: "Course not found.",
+      });
+    }
+
+    const [positions] = await connection.execute(
+      `
+        SELECT COALESCE(MAX(order_index), -1) AS last_position
+        FROM learn_topics
+        WHERE subject_id = ?
+      `,
+      [subjectId],
+    );
+
+    const orderIndex = Number(positions[0].last_position) + 1;
+
+    if (!Number.isSafeInteger(orderIndex) || orderIndex > 2147483647) {
+      await connection.rollback();
+      transactionStarted = false;
+
+      return res.status(409).json({
+        error: "Lesson ordering needs adjustment before adding a lesson.",
+      });
+    }
+
+    const [result] = await connection.execute(
+      `
+        INSERT INTO learn_topics (
+          subject_id,
+          order_index,
+          title,
+          content,
+          starter_code,
+          status
+        )
+        VALUES (?, ?, ?, ?, ?, 'draft')
+      `,
+      [subjectId, orderIndex, title, content, starterCode],
+    );
+
+    await writeAuditLog(connection, {
+      req,
+      action: "learning_topic_created",
+      category: "learning_management",
+      targetType: "learning_topic",
+      targetId: result.insertId,
+      description: `Created draft lesson "${title}".`,
+      details: {
+        subject_id: subjectId,
+        subject_name: subjects[0].name,
+        content_bytes: Buffer.byteLength(content, "utf8"),
+        starter_code_bytes: Buffer.byteLength(starterCode, "utf8"),
+      },
+      changes: {
+        title: { before: null, after: title },
+        subject_id: { before: null, after: subjectId },
+        order_index: { before: null, after: orderIndex },
+        status: { before: null, after: "draft" },
+      },
+    });
+
+    const [rows] = await connection.execute(
+      `
+        SELECT
+          id,
+          subject_id,
+          order_index,
+          title,
+          content,
+          starter_code,
+          status,
+          created_at,
+          updated_at
+        FROM learn_topics
+        WHERE id = ?
+        LIMIT 1
+      `,
+      [result.insertId],
+    );
+
+    await connection.commit();
+    transactionStarted = false;
+
+    return res.status(201).json(rows[0]);
+  } catch (error) {
+    if (connection && transactionStarted) {
+      try {
+        await connection.rollback();
+      } catch (rollbackError) {
+        console.error("Create lesson rollback error:", rollbackError);
+      }
+    }
+
+    console.error("Create learning topic error:", error);
+
+    return res.status(500).json({
+      error: "Unable to create the draft lesson.",
+    });
+  } finally {
+    connection?.release();
+  }
+});
 
 module.exports = router;
